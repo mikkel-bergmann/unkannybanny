@@ -1,5 +1,5 @@
 # unkannybanny
-Status: ready
+Status: complete
 Theme: banny-board
 
 ## Introduction
