@@ -1,4 +1,5 @@
 import express, { Router } from "express";
+import { filterItems, InvalidQueryError } from "./tags.js";
 import { validateNewItem, validateItemPatch, ItemValidationError } from "../items.js";
 
 function sendError(res, status, code, message) {
@@ -19,7 +20,7 @@ export default function itemsRouter(store) {
   const notFound = (res, id) => sendError(res, 404, "not-found", `no item with id ${id}`);
 
   router.get("/items", wrap(async (req, res) => {
-    res.json({ items: await store.list() });
+    res.json({ items: filterItems(await store.list(), req.query) });
   }));
 
   router.post("/items", requireJson, express.json(), wrap(async (req, res) => {
@@ -54,6 +55,9 @@ export default function itemsRouter(store) {
     }
     if (err instanceof ItemValidationError) {
       return sendError(res, 400, "invalid-item", err.message);
+    }
+    if (err instanceof InvalidQueryError) {
+      return sendError(res, 400, "invalid-query", err.message);
     }
     next(err);
   });
