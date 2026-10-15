@@ -1,0 +1,13 @@
+{
+  "name": "unkannybanny",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A localhost banny board over a JSON-file store",
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
