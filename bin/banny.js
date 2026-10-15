@@ -3,7 +3,16 @@ import { parseArgs } from "node:util";
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { createStore } from "../src/store.js";
+import { serializeExport } from "../src/routes/export.js";
 import { validateNewItem, validateItemPatch, ItemValidationError } from "../src/items.js";
+
+const SAMPLE_ITEMS = Object.freeze([
+  { title: "Peel the bananas", tags: ["kitchen"] },
+  { title: "Buy more bananas", tags: ["shop", "kitchen"] },
+  { title: "Water the banana plant", tags: ["garden"] },
+  { title: "Write the board README", done: true, tags: ["docs"] },
+  { title: "Plan the banana bread bake-off" },
+]);
 
 class UsageError extends Error {
   code = "usage";
@@ -64,6 +73,29 @@ export const commands = {
       const id = args[0];
       if (!(await store.remove(id))) throw new NotFoundError(`no item with id ${id}`);
       return { json: { id, removed: true }, text: "removed " + id };
+    },
+  },
+  seed: {
+    usage: "banny seed",
+    options: {},
+    async run({ args, store }) {
+      if (args.length > 0) throw new UsageError("seed takes no arguments");
+      if ((await store.list()).length > 0) {
+        return { json: { items: [] }, text: "store is not empty; nothing seeded" };
+      }
+      const inputs = SAMPLE_ITEMS.map((s) => validateNewItem(s));
+      const items = [];
+      for (const input of inputs) items.push(await store.create(input));
+      return { json: { items }, text: items.map(formatItem).join("\n") };
+    },
+  },
+  export: {
+    usage: "banny export",
+    options: {},
+    async run({ args, store }) {
+      if (args.length > 0) throw new UsageError("export takes no arguments");
+      const items = await store.list();
+      return { json: { items }, text: serializeExport(items).trimEnd() };
     },
   },
 };
