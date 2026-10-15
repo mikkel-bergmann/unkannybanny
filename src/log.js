@@ -28,6 +28,7 @@ export function requestLogger({
         ms,
       };
       if (res.locals.error) entry.error = res.locals.error;
+      if (!res.writableFinished) entry.aborted = true;
       write(JSON.stringify(entry));
     };
     res.on("finish", done);

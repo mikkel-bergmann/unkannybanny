@@ -1,6 +1,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import express from "express";
+import net from "node:net";
 import { createApp } from "../src/app.js";
 import { requestLogger, noRoute, errorHandler } from "../src/log.js";
 
@@ -75,6 +76,31 @@ test("a failed request logs the error message", async () => {
   const entry = JSON.parse(lines[0]);
   assert.equal(entry.status, 500);
   assert.equal(entry.error, "boom");
+});
+
+test("a request the client aborts is logged as aborted", async () => {
+  const lines = [];
+  const app = express();
+  app.use(requestLogger({ write: (l) => lines.push(l) }));
+  app.get("/slow", (req, res) => setTimeout(() => res.json({ ok: true }), 300));
+  const base = await listen(app);
+  const { port } = new URL(base);
+  const socket = net.connect(Number(port), "127.0.0.1", () => {
+    socket.write("GET /slow HTTP/1.1\r\nHost: x\r\n\r\n");
+    setTimeout(() => socket.destroy(), 30);
+  });
+  await waitFor(lines);
+  assert.equal(lines.length, 1);
+  assert.equal(JSON.parse(lines[0]).aborted, true);
+  await new Promise((r) => setTimeout(r, 350));
+  assert.equal(lines.length, 1);
+});
+
+test("a completed request carries no aborted key", async () => {
+  const { base, lines } = await helper();
+  await (await fetch(`${base}/boom`)).text();
+  await waitFor(lines);
+  assert.ok(!("aborted" in JSON.parse(lines[0])));
 });
 
 test("generated request ids are distinct v4 UUIDs", async () => {
