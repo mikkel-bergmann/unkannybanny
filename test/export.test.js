@@ -74,7 +74,11 @@ test("export output loads as a data file", async () => {
 
 test("export with an extra argument is a usage error", async () => {
   const { file } = await seeded();
-  assert.equal(banny(file, "export", "extra").status, 2);
+  const before = await fs.readFile(file, "utf8");
+  const r = banny(file, "export", "extra");
+  assert.equal(r.status, 2);
+  assert.equal(r.stdout, "");
+  assert.equal(await fs.readFile(file, "utf8"), before);
 });
 
 test("export on a corrupt store exits 1 with empty stdout", async () => {
