@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "A localhost banny board over a JSON-file store",
+  "bin": {
+    "banny": "bin/banny.js"
+  },
   "scripts": {
     "start": "node src/server.js",
     "test": "node --test"
