@@ -50,10 +50,14 @@ room carries real agent traffic. Success criteria:
   rely on.
 - **One JSON file is the database.** `src/store.js` owns it: the path comes
   from `BANNY_DATA`, default `data/banny.json`; `data/` is gitignored. The
-  store loads the whole file once, keeps it in memory, and writes through on
-  every mutation by writing a temp file beside it and renaming, so a crash
-  never leaves a half-written file. Ids are `crypto.randomUUID()`. The file
-  shape is `{"items": [...]}`; a missing file reads as empty. Rejected:
+  store keeps the whole file in memory as a cache and reloads it before every
+  read and mutation whenever the file's mtime or size differs from what it
+  last loaded, because the CLI writes the same file while the server runs.
+  It writes through on every mutation by writing a uniquely named temp file
+  beside it and renaming, so a crash never leaves a half-written file; writes
+  are serialized through one queue, each awaiting the previous, so an older
+  snapshot never lands after a newer one. Ids are `crypto.randomUUID()`. The
+  file shape is `{"items": [...]}`; a missing file reads as empty. Rejected:
   SQLite, which is a second database and a native dependency.
 - **The item shape is fixed here, not per member.** An item is
   `{id, title, done, tags, createdAt, updatedAt}`: `title` is a trimmed
@@ -67,7 +71,10 @@ room carries real agent traffic. Success criteria:
   `400` with code `invalid-item`; an unknown id is `404` with code
   `not-found`; an unknown route is `404` with code `no-route`; anything
   unhandled is `500` with code `internal`. The API speaks JSON only and
-  returns `415` with code `unsupported-media-type` for a non-JSON body.
+  returns `415` with code `unsupported-media-type` for a non-JSON body and
+  `400` with code `invalid-json` for a malformed one. items-api owns JSON
+  body parsing and both of those responses; the error handler maps a body
+  parser's error to `invalid-json`, never to `internal`.
 - **The server binds `127.0.0.1` only.** `src/server.js` listens on `PORT`
   (default `4321`) on the loopback address and never on all interfaces.
   `src/app.js` exports `createApp({ store })` and never listens, so tests and
@@ -80,7 +87,10 @@ room carries real agent traffic. Success criteria:
 - **Every member ships tests and keeps `npm test` green.** A member adds a
   `test/<area>.test.js` that starts the app on port 0 against a store in a
   temp directory, so tests never touch `data/`. No member edits another
-  member's tests except to fix a break it caused.
+  member's tests except to fix a break it caused. json-store's tests cover
+  overlapping mutations and a write made to the file from outside the store;
+  items-api's tests cover a malformed body (`400 invalid-json`) and a
+  non-JSON body (`415`).
 - **The capability library starts empty, so every delta is `ADDED`.** Each
   member creates its own capability named after its area; a later member that
   changes an earlier member's contract writes a `MODIFIED` delta against it.
@@ -101,15 +111,16 @@ room carries real agent traffic. Success criteria:
 The board is four layers over one file:
 
 ```
-  bin/banny.js  ──────────────┐
-                              ▼
   public/index.html ──▶ src/app.js ──▶ src/routes/{health,items,tags,export}.js
                               │                 │
                               │                 ▼
-                              │            src/items.js   (validate)
-                              ▼                 │
-                          src/log.js            ▼
-                                           src/store.js  ──▶ data/banny.json
+                              │            src/items.js   (validate)  ◀───┐
+                              ▼                 │                         │
+                          src/log.js            ▼                         │
+                                           src/store.js  ◀── bin/banny.js─┘
+                                                │
+                                                ▼
+                                          data/banny.json
 ```
 
 The store and the app factory are the two roots, and they do not depend on
@@ -121,9 +132,9 @@ the API. Request logging and the error handler wrap the app and depend only
 on the factory. The room wake touches `.github/` alone.
 
 Each `src/routes/<area>.js` exports a function `(store) => Router`, and
-`createApp` mounts the routers it is given in a fixed order: health, items,
-tags, export, then the static page, then the `no-route` handler, then the
-error handler. The `After` column below orders the members along those
+`createApp` mounts the request logger first, then its routers in a fixed
+order: health, items, tags, export, then the static page, then the
+`no-route` handler, then the error handler. The `After` column below orders the members along those
 seams.
 
 ## Changes
