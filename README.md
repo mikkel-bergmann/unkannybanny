@@ -36,3 +36,12 @@ exist on GitHub. A person sets them outside any pull request:
 
 Until both exist, a room task is left for a live session's
 `shipd room watch`.
+
+## Try it
+
+```sh
+npm start                      # the board at http://127.0.0.1:4321/
+node bin/banny.js seed         # five sample items into data/banny.json
+node bin/banny.js list         # the same items from the command line
+curl -s http://127.0.0.1:4321/export -o banny-export.json
+```
