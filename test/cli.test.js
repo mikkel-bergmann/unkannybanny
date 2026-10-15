@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createStore } from "../src/store.js";
 
 const BIN = fileURLToPath(new URL("../bin/banny.js", import.meta.url));
@@ -41,6 +41,14 @@ test("usage errors exit 2 with empty stdout", async () => {
 test("importing the module exposes commands and runs nothing", async () => {
   const { commands } = await import("../bin/banny.js");
   assert.deepEqual(Object.keys(commands).slice(0, 4), ["list", "add", "done", "remove"]);
+});
+
+test("importing the module tolerates an argv[1] that is not a file", async () => {
+  const { dir } = await tmpFile();
+  const code = `import(${JSON.stringify(pathToFileURL(BIN).href)}).then((m) => console.log(Object.keys(m.commands)[0]))`;
+  const r = spawnSync(process.execPath, ["-e", code, "no-such-file"], { cwd: dir, encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, "list\n");
 });
 
 test("entry guard holds through a symlink", async () => {

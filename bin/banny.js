@@ -126,9 +126,15 @@ export async function main(
   }
 }
 
-if (
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href
-) {
+function isEntryPoint(entry) {
+  if (!entry) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(entry)).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isEntryPoint(process.argv[1])) {
   process.exitCode = await main(process.argv.slice(2));
 }
