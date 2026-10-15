@@ -5,9 +5,13 @@
   "type": "module",
   "description": "A localhost banny board over a JSON-file store",
   "scripts": {
+    "start": "node src/server.js",
     "test": "node --test"
   },
   "engines": {
     "node": ">=22"
+  },
+  "dependencies": {
+    "express": "^4.22.3"
   }
 }
