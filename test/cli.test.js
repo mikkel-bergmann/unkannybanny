@@ -97,6 +97,18 @@ test("add refuses invalid items and leaves the file unchanged", async () => {
   }
 });
 
+test("words after -- are title words, not flags", async () => {
+  const { file } = await tmpFile();
+  const h = banny(file, "add", "--", "-h", "is", "a", "flag");
+  assert.equal(h.status, 0);
+  const j = banny(file, "add", "--", "--json");
+  assert.equal(j.status, 0);
+  const { items } = JSON.parse(await fs.readFile(file, "utf8"));
+  assert.deepEqual(items.map((i) => i.title), ["-h is a flag", "--json"]);
+  assert.equal(h.stdout, `${items[0].id}  [ ] -h is a flag\n`);
+  assert.equal(j.stdout, `${items[1].id}  [ ] --json\n`);
+});
+
 test("add without a title is a usage error", async () => {
   const { file } = await tmpFile();
   assert.equal(banny(file, "add", "--tag", "shop").status, 2);

@@ -72,9 +72,11 @@ export async function main(
   argv,
   { stdout = process.stdout, stderr = process.stderr, store } = {},
 ) {
-  const asJson = argv.includes("--json");
+  const end = argv.indexOf("--");
+  const flags = end === -1 ? argv : argv.slice(0, end);
+  const asJson = flags.includes("--json");
   try {
-    if (argv.includes("--help") || argv.includes("-h")) {
+    if (flags.includes("--help") || flags.includes("-h")) {
       stdout.write(
         ["usage:", ...Object.values(commands).map((c) => "  " + c.usage)].join("\n") + "\n",
       );
