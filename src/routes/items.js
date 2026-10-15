@@ -8,7 +8,7 @@ function sendError(res, status, code, message) {
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
 function requireJson(req, res, next) {
-  if (!req.is("application/json")) {
+  if (!req.is("application/json") || req.get("content-length") === "0") {
     return sendError(res, 415, "unsupported-media-type", "request body must be application/json");
   }
   next();

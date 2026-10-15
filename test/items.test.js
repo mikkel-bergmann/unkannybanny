@@ -147,6 +147,9 @@ test("non-JSON content types answer 415", async () => {
   assert.equal((await res.json()).error.code, "unsupported-media-type");
   const none = await fetch(`${base}/items`, { method: "POST" });
   assert.equal(none.status, 415);
+  const emptyJson = await fetch(`${base}/items`, { method: "POST", headers: JSON_H });
+  assert.equal(emptyJson.status, 415);
+  assert.equal((await emptyJson.json()).error.code, "unsupported-media-type");
   const item = await (await send(base, "POST", "/items", '{"title":"a"}')).json();
   const patch = await send(base, "PATCH", `/items/${item.id}`, '{"done":true}', text);
   assert.equal(patch.status, 415);
