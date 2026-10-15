@@ -2,7 +2,7 @@ import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { createApp } from "./app.js";
 
-export async function startServer({ port = process.env.PORT ?? 4321, store } = {}) {
+export async function startServer({ port = process.env.PORT || 4321, store } = {}) {
   const app = createApp({ store });
   return new Promise((resolve, reject) => {
     const server = app.listen(Number(port), "127.0.0.1");
