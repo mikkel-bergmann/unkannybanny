@@ -121,14 +121,19 @@ function renderItems(items) {
   }
 }
 
+let refreshSeq = 0;
 async function refresh() {
+  const seq = ++refreshSeq;
   try {
     const { tags } = await api("GET", "/tags");
+    if (seq !== refreshSeq) return;
     renderTags(tags);
     const { items } = await api("GET", activeTag === null ? "/items" : "/items?tag=" + encodeURIComponent(activeTag));
+    if (seq !== refreshSeq) return;
     renderItems(items);
+    showStatus("");
   } catch (err) {
-    showStatus(err.message);
+    if (seq === refreshSeq) showStatus(err.message);
   }
 }
 
