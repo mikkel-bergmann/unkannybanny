@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Banny board</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 1rem; }
+  main { max-width: 40rem; margin: 0 auto; }
+  form { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem; }
+  form input { padding: 0.4rem; }
+  nav { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 1rem; }
+  button { padding: 0.3rem 0.7rem; cursor: pointer; }
+  [aria-pressed="true"] { background: #1a5fd0; color: #fff; border: 1px solid #1a5fd0; }
+  ul { list-style: none; padding: 0; }
+  li { padding: 0.4rem 0; border-bottom: 1px solid #ddd; }
+  li.done { text-decoration: line-through; color: #777; }
+  li.empty { color: #777; }
+  .tag { display: inline-block; margin-left: 0.4rem; padding: 0 0.5rem; border-radius: 999px; background: #e6edf8; color: #234; font-size: 0.8rem; }
+  #status { min-height: 1.2rem; color: #b00020; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Banny board</h1>
+  <form id="add-form">
+    <input id="add-title" name="title" required maxlength="200" placeholder="New item">
+    <input id="add-tags" name="tags" placeholder="tags, comma, separated">
+    <button type="submit">Add</button>
+  </form>
+  <nav id="tag-filter" aria-label="Filter by tag"></nav>
+  <ul id="item-list"></ul>
+  <p id="status" role="status" aria-live="polite"></p>
+</main>
+<script>
+let activeTag = null;
+const $ = (id) => document.getElementById(id);
+function showStatus(text) {
+  $("status").textContent = text;
+}
+
+async function api(method, path, body) {
+  let res;
+  try {
+    res = await fetch(path, {
+      method,
+      headers: body === undefined ? {} : { "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (err) {
+    throw new Error("Could not reach the server");
+  }
+  if (res.status === 204) return null;
+  let data = null;
+  try {
+    data = await res.json();
+  } catch (err) {
+    data = null;
+  }
+  if (!res.ok) throw new Error(data?.error?.message ?? "Request failed");
+  return data;
+}
+
+function renderTags(tags) {
+  if (activeTag !== null && !tags.some((entry) => entry.tag === activeTag)) activeTag = null;
+  const nav = $("tag-filter");
+  nav.replaceChildren();
+  const add = (label, value) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = label;
+    button.setAttribute("aria-pressed", activeTag === value ? "true" : "false");
+    button.addEventListener("click", () => {
+      activeTag = value;
+      refresh();
+    });
+    nav.appendChild(button);
+  };
+  add("All", null);
+  for (const { tag, count } of tags) add(`${tag} (${count})`, tag);
+}
+
+function renderItems(items) {
+  const list = $("item-list");
+  list.replaceChildren();
+  if (items.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "empty";
+    empty.textContent = "No items";
+    list.appendChild(empty);
+    return;
+  }
+  for (const item of items) {
+    const li = document.createElement("li");
+    if (item.done) li.className = "done";
+    const label = document.createElement("label");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = item.done;
+    checkbox.addEventListener("change", async () => {
+      try {
+        await api("PATCH", "/items/" + encodeURIComponent(item.id), { done: checkbox.checked });
+        showStatus("");
+        await refresh();
+      } catch (err) {
+        checkbox.checked = !checkbox.checked;
+        showStatus(err.message);
+      }
+    });
+    const title = document.createElement("span");
+    title.textContent = item.title;
+    label.append(checkbox, " ", title);
+    li.appendChild(label);
+    for (const tag of item.tags) {
+      const span = document.createElement("span");
+      span.className = "tag";
+      span.textContent = tag;
+      li.appendChild(span);
+    }
+    list.appendChild(li);
+  }
+}
+
+async function refresh() {
+  try {
+    const { tags } = await api("GET", "/tags");
+    renderTags(tags);
+    const { items } = await api("GET", activeTag === null ? "/items" : "/items?tag=" + encodeURIComponent(activeTag));
+    renderItems(items);
+  } catch (err) {
+    showStatus(err.message);
+  }
+}
+
+$("add-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const title = $("add-title").value;
+  const tags = $("add-tags").value.split(",").map((s) => s.trim()).filter(Boolean);
+  try {
+    await api("POST", "/items", { title, tags });
+    $("add-form").reset();
+    showStatus("");
+    await refresh();
+  } catch (err) {
+    showStatus(err.message);
+  }
+});
+
+refresh();
+</script>
+</body>
+</html>
