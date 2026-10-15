@@ -51,13 +51,13 @@ export function createStore({ path } = {}) {
     const tmp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
     try {
       await fs.writeFile(tmp, JSON.stringify({ items }, null, 2) + "\n");
+      const st = await fs.stat(tmp);
       await fs.rename(tmp, file);
+      loadedStat = { mtimeMs: st.mtimeMs, size: st.size };
     } catch (err) {
       await fs.rm(tmp, { force: true });
       throw err;
     }
-    const st = await fs.stat(file);
-    loadedStat = { mtimeMs: st.mtimeMs, size: st.size };
   }
 
   async function commit(next) {

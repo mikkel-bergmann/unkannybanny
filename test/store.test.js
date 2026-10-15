@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { createStore } from "../src/store.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -151,4 +153,24 @@ test("a file without an items array is corrupt", async () => {
   await fs.writeFile(file, "{}");
   const store = createStore({ path: file });
   await assert.rejects(store.list(), { code: "store-corrupt" });
+});
+
+test("a failed write rejects, leaves no temp file, and keeps the prior state", { skip: process.getuid?.() === 0 }, async () => {
+  const dir = await tmpDir();
+  const store = createStore({ path: path.join(dir, "banny.json") });
+  const first = await store.create(sample);
+  await fs.chmod(dir, 0o555);
+  try {
+    await assert.rejects(store.create({ title: "b", done: false, tags: [] }));
+    assert.deepEqual(await fs.readdir(dir), ["banny.json"]);
+    assert.deepEqual(await store.list(), [first]);
+  } finally {
+    await fs.chmod(dir, 0o755);
+  }
+});
+
+test("the data directory is ignored by git", () => {
+  const root = fileURLToPath(new URL("..", import.meta.url));
+  const result = spawnSync("git", ["check-ignore", "-q", "data/banny.json"], { cwd: root });
+  assert.equal(result.status, 0);
 });
