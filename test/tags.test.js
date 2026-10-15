@@ -108,3 +108,20 @@ test("GET /tags counts tags", async () => {
   assert.equal(res.status, 200);
   assert.deepEqual(await res.json(), { tags: [{ tag: "food", count: 1 }, { tag: "shop", count: 2 }] });
 });
+
+test("GET /tags answers 500 and keeps serving when an item has no tags", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "banny-"));
+  const file = path.join(dir, "banny.json");
+  await fs.writeFile(file, JSON.stringify({ items: [{ id: "1", title: "x", done: false }] }));
+  const app = createApp({ store: createStore({ path: file }) });
+  const server = await new Promise((resolve) => {
+    const s = app.listen(0, "127.0.0.1", () => resolve(s));
+  });
+  servers.push(server);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const res = await fetch(base + "/tags");
+  assert.equal(res.status, 500);
+  assert.equal((await res.json()).error.code, "internal");
+  const health = await fetch(base + "/health");
+  assert.equal(health.status, 200);
+});

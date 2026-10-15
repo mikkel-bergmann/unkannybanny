@@ -43,7 +43,7 @@ export function countTags(items) {
 export default function tagsRouter(store) {
   const router = express.Router();
   router.get("/tags", (req, res, next) =>
-    store.list().then((items) => res.json({ tags: countTags(items) }), next),
+    store.list().then((items) => res.json({ tags: countTags(items) })).catch(next),
   );
   return router;
 }
