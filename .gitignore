@@ -3,3 +3,4 @@ node_modules/
 .shipd/state.json
 .shipd/autopilot/
 .DS_Store
+data/
