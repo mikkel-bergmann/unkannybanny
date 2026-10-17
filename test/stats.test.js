@@ -101,3 +101,14 @@ test("stats on a corrupt store exits 1 with empty stdout", async () => {
   assert.equal(r.status, 1);
   assert.equal(r.stdout, "");
 });
+
+test("stats --json on a corrupt store prints the error shape on stderr", async () => {
+  const { file } = await tmpFile();
+  await fs.writeFile(file, "not json");
+  const r = banny(file, "stats", "--json");
+  assert.equal(r.status, 1);
+  assert.equal(r.stdout, "");
+  const body = JSON.parse(r.stderr);
+  assert.equal(body.error.code, "store-corrupt");
+  assert.equal(typeof body.error.message, "string");
+});
