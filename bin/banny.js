@@ -4,6 +4,7 @@ import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { createStore } from "../src/store.js";
 import { serializeExport } from "../src/routes/export.js";
+import { computeStats } from "../src/routes/stats.js";
 import { validateNewItem, validateItemPatch, ItemValidationError } from "../src/items.js";
 
 const SAMPLE_ITEMS = Object.freeze([
@@ -96,6 +97,18 @@ export const commands = {
       if (args.length > 0) throw new UsageError("export takes no arguments");
       const items = await store.list();
       return { json: { items }, text: serializeExport(items).trimEnd() };
+    },
+  },
+  stats: {
+    usage: "banny stats",
+    options: {},
+    async run({ args, store }) {
+      if (args.length > 0) throw new UsageError("stats takes no arguments");
+      const stats = computeStats(await store.list());
+      return {
+        json: stats,
+        text: `total: ${stats.total}\ndone: ${stats.done}\nopen: ${stats.open}\ntags: ${stats.tags}`,
+      };
     },
   },
 };
