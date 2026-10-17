@@ -20,7 +20,7 @@ The server listens on `http://127.0.0.1:4321/` (override the port with
 
 ```sh
 npm ci
-npm start                              # board on http://127.0.0.1:4321/
+npm start                              # board on http://127.0.0.1:4321/ (keeps running; use a second terminal for the rest)
 node bin/banny.js seed                 # add sample items (only if the store is empty)
 node bin/banny.js list                 # list them
 node bin/banny.js export > banny-export.json
