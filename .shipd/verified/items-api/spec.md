@@ -6,34 +6,41 @@ id: item-validation
 The system SHALL export from `src/items.js` the functions `validateNewItem(input)`
 and `validateItemPatch(input)` and the class `ItemValidationError`, an `Error`
 whose `code` is `invalid-item`. `validateNewItem` SHALL return
-`{ title, done, tags }` with `title` trimmed, `done` defaulting to `false`, and
-`tags` defaulting to `[]`. `validateItemPatch` SHALL return an object holding
-only the `title`, `done`, and `tags` keys present in `input`, with `title`
-trimmed. If `input` is not a plain object, holds a key other than `title`,
-`done`, or `tags`, has a trimmed `title` outside 1 to 200 characters or not a
-string, has a non-boolean `done`, or has `tags` that is not an array of at most
-10 distinct strings matching `^[a-z0-9]+(-[a-z0-9]+)*$`, then both functions
-SHALL throw `ItemValidationError` with a message naming the field. If
-`validateNewItem` receives no `title`, or `validateItemPatch` receives none of
-the three keys, then it SHALL throw `ItemValidationError`.
+`{ title, done, tags, columnId }` with `title` trimmed, `done` defaulting to
+`false`, `tags` defaulting to `[]`, and `columnId` defaulting to `null`.
+`validateItemPatch` SHALL return an object holding only the `title`, `done`,
+`tags`, and `columnId` keys present in `input`, with `title` trimmed. If
+`input` is not a plain object, holds a key other than `title`, `done`, `tags`,
+or `columnId`, has a trimmed `title` outside 1 to 200 characters or not a
+string, has a non-boolean `done`, has `tags` that is not an array of at most 10
+distinct strings matching `^[a-z0-9]+(-[a-z0-9]+)*$`, or has a `columnId` that
+is neither `null` nor a non-empty string, then both functions SHALL throw
+`ItemValidationError` with a message naming the field. If `validateNewItem`
+receives no `title`, or `validateItemPatch` receives none of the four keys, then
+it SHALL throw `ItemValidationError`.
 
 #### Scenario: New item gets defaults and a trimmed title
 - **WHEN** `validateNewItem({ title: "  milk  " })` is called
-- **THEN** it returns `{ title: "milk", done: false, tags: [] }`
+- **THEN** it returns `{ title: "milk", done: false, tags: [], columnId: null }`
+
+#### Scenario: New item keeps a column id
+- **WHEN** `validateNewItem({ title: "milk", columnId: "c1" })` is called
+- **THEN** it returns `{ title: "milk", done: false, tags: [], columnId: "c1" }`
 
 #### Scenario: Shape violations are rejected
 - **WHEN** `validateNewItem` is called with each of `[]`, `{}`,
   `{ title: "   " }`, a 201-character title, `{ title: "a", done: "yes" }`,
   `{ title: "a", tags: ["Bad Tag"] }`, `{ title: "a", tags: ["x", "x"] }`,
-  eleven distinct tags, and `{ title: "a", id: "x" }`
+  eleven distinct tags, `{ title: "a", id: "x" }`, and
+  `{ title: "a", columnId: "" }`
 - **THEN** each call throws an `ItemValidationError` whose `code` is
   `invalid-item`
 
 #### Scenario: Patch keeps only provided keys
-- **WHEN** `validateItemPatch({ done: true })` is called, and then
-  `validateItemPatch({})`
-- **THEN** the first returns `{ done: true }` and the second throws
-  `ItemValidationError`
+- **WHEN** `validateItemPatch({ done: true })` is called, then
+  `validateItemPatch({ columnId: null })`, then `validateItemPatch({})`
+- **THEN** the first returns `{ done: true }`, the second returns
+  `{ columnId: null }`, and the third throws `ItemValidationError`
 
 ### Requirement: Items routes
 id: items-routes
@@ -52,19 +59,33 @@ serving these routes over the store from json-store's `createStore`:
   the item, and answer `200` with the updated item.
 - `DELETE /items/:id` SHALL remove the item and answer `204` with no body.
 
-If `:id` names no item on `GET`, `PATCH`, or `DELETE`, then the system SHALL
-answer `404` with `{"error":{"code":"not-found","message":"<text>"}}`. If
-validation throws `ItemValidationError`, then the system SHALL answer `400` with
-code `invalid-item` and the error's message, and SHALL NOT change the store.
-Any other error SHALL be passed to `next(err)`.
+If a `POST` or `PATCH` body carries a `columnId` that is not `null` and names no
+column in the store, then the system SHALL answer `400` with code
+`invalid-item` and SHALL NOT change the store. If `:id` names no item on `GET`,
+`PATCH`, or `DELETE`, then the system SHALL answer `404` with
+`{"error":{"code":"not-found","message":"<text>"}}`. If validation throws
+`ItemValidationError`, then the system SHALL answer `400` with code
+`invalid-item` and the error's message, and SHALL NOT change the store. Any
+other error SHALL be passed to `next(err)`.
 
 #### Scenario: Create, read, list
 - **WHEN** a client sends `POST /items` with JSON `{"title":"milk","tags":["shop"]}`
   and then `GET /items/<id>` and `GET /items`
 - **THEN** the create answers `201` with `Location: /items/<id>` and an item
-  `{id, title: "milk", done: false, tags: ["shop"], createdAt, updatedAt}`, the
-  read answers `200` with the same item, and the list answers `200` with
+  `{id, title: "milk", done: false, tags: ["shop"], columnId: null, createdAt, updatedAt}`,
+  the read answers `200` with the same item, and the list answers `200` with
   `{"items": [<that item>]}`
+
+#### Scenario: Create in a column
+- **WHEN** the store holds column `c` and a client sends `POST /items` with JSON
+  `{"title":"milk","columnId":"c"}`
+- **THEN** the response is `201` and the created item's `columnId` is `c`
+
+#### Scenario: Unknown column is refused
+- **WHEN** a client sends `POST /items` with JSON
+  `{"title":"milk","columnId":"nope"}`
+- **THEN** the response is `400` with code `invalid-item` and `GET /items`
+  still answers `{"items": []}`
 
 #### Scenario: Update and delete
 - **WHEN** a client sends `PATCH /items/<id>` with `{"done":true}` and then

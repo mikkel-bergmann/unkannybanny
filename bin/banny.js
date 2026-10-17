@@ -6,6 +6,7 @@ import { createStore } from "../src/store.js";
 import { serializeExport } from "../src/routes/export.js";
 import { computeStats } from "../src/routes/stats.js";
 import { validateNewItem, validateItemPatch, ItemValidationError } from "../src/items.js";
+import { validateNewColumn, validateColumnPatch } from "../src/columns.js";
 
 const SAMPLE_ITEMS = Object.freeze([
   { title: "Peel the bananas", tags: ["kitchen"] },
@@ -33,6 +34,10 @@ const GLOBAL_OPTIONS = {
 function formatItem(item) {
   const line = `${item.id}  [${item.done ? "x" : " "}] ${item.title}`;
   return item.tags.length > 0 ? line + "  " + item.tags.map((t) => "#" + t).join(" ") : line;
+}
+
+function formatColumn(column) {
+  return `${column.id}  ${column.name}`;
 }
 
 export const commands = {
@@ -96,7 +101,9 @@ export const commands = {
     async run({ args, store }) {
       if (args.length > 0) throw new UsageError("export takes no arguments");
       const items = await store.list();
-      return { json: { items }, text: serializeExport(items).trimEnd() };
+      const columns = await store.listColumns();
+      const json = columns.length > 0 ? { items, columns } : { items };
+      return { json, text: serializeExport(items, columns).trimEnd() };
     },
   },
   stats: {
@@ -109,6 +116,77 @@ export const commands = {
         json: stats,
         text: `total: ${stats.total}\ndone: ${stats.done}\nopen: ${stats.open}\ntags: ${stats.tags}`,
       };
+    },
+  },
+  columns: {
+    usage: "banny columns",
+    options: {},
+    async run({ args, store }) {
+      if (args.length > 0) throw new UsageError("columns takes no arguments");
+      const columns = await store.listColumns();
+      return { json: { columns }, text: columns.map(formatColumn).join("\n") };
+    },
+  },
+  column: {
+    usage:
+      "banny column add <name...> | rename <id> <name...> | move <id> <position> | remove <id>",
+    options: {},
+    async run({ args, store }) {
+      const [sub, ...rest] = args;
+      if (sub === "add") {
+        if (rest.length === 0) throw new UsageError("column add needs a name");
+        const column = await store.createColumn(validateNewColumn({ name: rest.join(" ") }));
+        return { json: column, text: formatColumn(column) };
+      }
+      if (sub === "rename") {
+        if (rest.length < 2) throw new UsageError("column rename needs an id and a name");
+        const [id, ...words] = rest;
+        const column = await store.updateColumn(id, validateColumnPatch({ name: words.join(" ") }));
+        if (!column) throw new NotFoundError(`no column with id ${id}`);
+        return { json: column, text: formatColumn(column) };
+      }
+      if (sub === "move") {
+        if (rest.length !== 2) throw new UsageError("column move needs an id and a position");
+        const [id, rawPosition] = rest;
+        const position = Number(rawPosition);
+        const columns = await store.listColumns();
+        const index = columns.findIndex((c) => c.id === id);
+        if (index === -1) throw new NotFoundError(`no column with id ${id}`);
+        if (!Number.isInteger(position) || position < 1 || position > columns.length) {
+          throw new UsageError("position must be between 1 and the column count");
+        }
+        const ids = columns.map((c) => c.id);
+        ids.splice(index, 1);
+        ids.splice(position - 1, 0, id);
+        const reordered = await store.reorderColumns(ids);
+        return { json: { columns: reordered }, text: reordered.map(formatColumn).join("\n") };
+      }
+      if (sub === "remove") {
+        if (rest.length !== 1) throw new UsageError("column remove needs an id");
+        const [id] = rest;
+        if (!(await store.removeColumn(id))) throw new NotFoundError(`no column with id ${id}`);
+        return { json: { id, removed: true }, text: "removed " + id };
+      }
+      throw new UsageError(`unknown column sub-verb: ${sub ?? "(none)"}`);
+    },
+  },
+  move: {
+    usage: "banny move <item-id> <column-id> | <item-id> --none",
+    options: { none: { type: "boolean" } },
+    async run({ args, values, store }) {
+      if (values.none) {
+        if (args.length !== 1) throw new UsageError("move --none needs exactly one item id");
+      } else if (args.length !== 2) {
+        throw new UsageError("move needs an item id and a column id, or --none");
+      }
+      const id = args[0];
+      const columnId = values.none ? null : args[1];
+      if (columnId !== null && !(await store.getColumn(columnId))) {
+        throw new NotFoundError(`no column with id ${columnId}`);
+      }
+      const item = await store.update(id, validateItemPatch({ columnId }));
+      if (!item) throw new NotFoundError(`no item with id ${id}`);
+      return { json: item, text: formatItem(item) };
     },
   },
 };

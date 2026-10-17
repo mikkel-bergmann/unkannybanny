@@ -29,6 +29,24 @@ curl http://127.0.0.1:4321/export      # the same export over HTTP
 
 Items live in `data/banny.json`; set `BANNY_DATA` to use another file.
 
+## Columns
+
+The board is a kanban. Columns are named and ordered by their position in the
+store; a card can sit in one column or in none.
+
+```sh
+node bin/banny.js column add Doing              # create a column
+node bin/banny.js columns                       # list them, in order
+node bin/banny.js column rename <id> "In progress"
+node bin/banny.js column move <id> 1            # move it to position 1
+node bin/banny.js move <item-id> <column-id>    # put a card in a column
+node bin/banny.js move <item-id> --none         # take it out again
+node bin/banny.js column remove <id>            # delete it; its cards move to Unassigned
+```
+
+On the board page, drag a card between lanes, edit a lane's name in place, and
+use the `◀` `▶` `✕` buttons to reorder or remove a column.
+
 ## Run the tests
 
 ```sh

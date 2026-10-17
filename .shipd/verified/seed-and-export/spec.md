@@ -69,32 +69,34 @@ or more items, then the system SHALL create nothing, exit `0`, print
 id: export-document
 
 The system SHALL export from `src/routes/export.js` a named function
-`serializeExport(items)` returning `JSON.stringify({ items }, null, 2) + "\n"`,
-the same text json-store writes to the data file. Both `banny export` and
-`GET /export` SHALL produce their document through it, so the two outputs are
-byte-identical for the same store and either can be used as a `BANNY_DATA`
-file.
+`serializeExport(items, columns = [])` returning
+`JSON.stringify({ items, columns }, null, 2) + "\n"` when `columns` is non-empty
+and `JSON.stringify({ items }, null, 2) + "\n"` when it is empty — the same text
+json-store writes to the data file. Both `banny export` and `GET /export` SHALL
+produce their document through it, so the two outputs are byte-identical for the
+same store and either can be used as a `BANNY_DATA` file.
 
 #### Scenario: Export output loads as a data file
-- **WHEN** a store holds two items, `banny export` is written to a new file,
-  and `createStore({ path: <that file> }).list()` is called
-- **THEN** it resolves to the same two items
+- **WHEN** a store holds two items and one column, `banny export` is written to
+  a new file, and `createStore({ path: <that file> }).list()` and
+  `.listColumns()` are called
+- **THEN** they resolve to the same two items and the same one column
 
 ### Requirement: Export verb
 id: export-verb
 
-When a user runs `banny export`, the system SHALL read every item from the
-store and write `serializeExport(items)` to stdout and nothing else. Where
-`--json` is given, the system SHALL print the same `{"items":[...]}` object as
+When a user runs `banny export`, the system SHALL read every item and every
+column from the store and write `serializeExport(items, columns)` to stdout and
+nothing else. Where `--json` is given, the system SHALL print the same object as
 one compact JSON line, per the CLI's JSON convention. The system SHALL NOT
 change or create the data file.
 
 #### Scenario: Export prints the whole store
-- **WHEN** the store holds an open item `milk` tagged `shop` and a done item
-  `bread`, and a user runs `banny export`
-- **THEN** the exit code is `0`, stdout equals `serializeExport(items)` for
-  those two items in store order, and stdout is byte-identical to the data
-  file after the store's last write
+- **WHEN** the store holds an open item `milk` tagged `shop`, a done item
+  `bread`, and one column, and a user runs `banny export`
+- **THEN** the exit code is `0`, stdout equals `serializeExport(items, columns)`
+  for that store, and stdout is byte-identical to the data file after the
+  store's last write
 
 #### Scenario: Export of an empty store
 - **WHEN** `BANNY_DATA` names a file that does not exist and a user runs
@@ -111,21 +113,22 @@ change or create the data file.
 id: export-route
 
 The system SHALL default-export from `src/routes/export.js` a function
-`(store) => Router` that `createApp` mounts after the tags router (or after the
-items router where the tags router is not mounted) and before any static,
+`(store) => Router` that `createApp` mounts after the columns router (or after
+the tags router where the columns router is not mounted) and before any static,
 `no-route`, or error handler. When a client sends `GET /export`, the system
 SHALL answer `200` with `Content-Type: application/json; charset=utf-8`,
 `Content-Disposition: attachment; filename="banny-export.json"`, and the body
-`serializeExport(items)` over every item in store order. If the store rejects,
-then the router SHALL pass the error to `next(err)`, so the app's error handler
-answers it.
+`serializeExport(items, columns)` over every item and column in store order. If
+the store rejects, then the router SHALL pass the error to `next(err)`, so the
+app's error handler answers it.
 
 #### Scenario: Export downloads the store
-- **WHEN** the store holds two items and a client sends `GET /export`
+- **WHEN** the store holds two items and one column and a client sends
+  `GET /export`
 - **THEN** the response is `200`, `Content-Type` starts with
   `application/json`, `Content-Disposition` equals
   `attachment; filename="banny-export.json"`, and the body text equals
-  `serializeExport` of the two items
+  `serializeExport` of the store's items and columns
 
 #### Scenario: Route and CLI agree
 - **WHEN** the same data file is exported by `GET /export` and by

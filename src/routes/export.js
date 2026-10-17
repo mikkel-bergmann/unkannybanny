@@ -1,7 +1,8 @@
 import express from "express";
 
-export function serializeExport(items) {
-  return JSON.stringify({ items }, null, 2) + "\n";
+export function serializeExport(items, columns = []) {
+  const state = columns.length > 0 ? { items, columns } : { items };
+  return JSON.stringify(state, null, 2) + "\n";
 }
 
 export default (store) => {
@@ -10,9 +11,10 @@ export default (store) => {
     Promise.resolve()
       .then(async () => {
         const items = await store.list();
+        const columns = await store.listColumns();
         res.attachment("banny-export.json");
         res.type("application/json");
-        res.send(serializeExport(items));
+        res.send(serializeExport(items, columns));
       })
       .catch(next),
   );
