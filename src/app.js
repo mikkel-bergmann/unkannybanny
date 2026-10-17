@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import healthRouter from "./routes/health.js";
 import itemsRouter from "./routes/items.js";
 import tagsRouter from "./routes/tags.js";
+import columnsRouter from "./routes/columns.js";
 import exportRouter from "./routes/export.js";
 import statsRouter from "./routes/stats.js";
 import { requestLogger, noRoute, errorHandler } from "./log.js";
@@ -15,6 +16,7 @@ export function createApp({ store } = {}) {
   app.use(healthRouter(store));
   app.use(itemsRouter(store));
   app.use(tagsRouter(store));
+  app.use(columnsRouter(store));
   app.use(exportRouter(store));
   app.use(statsRouter(store));
   app.use(express.static(publicDir));

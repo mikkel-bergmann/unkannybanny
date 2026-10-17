@@ -109,3 +109,31 @@ test("GET /export over a corrupt store answers 500", async () => {
   });
   assert.equal(await fs.readFile(file, "utf8"), "not json");
 });
+
+test("export carries columns and reloads them", async () => {
+  const { dir, file, store } = await seeded();
+  await store.createColumn({ name: "Doing" });
+  const r = banny(file, "export");
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, await fs.readFile(file, "utf8"));
+  const copy = path.join(dir, "copy.json");
+  await fs.writeFile(copy, r.stdout);
+  const reloaded = createStore({ path: copy });
+  assert.deepEqual(await reloaded.list(), await store.list());
+  assert.deepEqual(
+    (await reloaded.listColumns()).map((c) => c.name),
+    ["Doing"],
+  );
+});
+
+test("GET /export carries columns and matches the CLI", async () => {
+  const { file, store } = await seeded();
+  await store.createColumn({ name: "Doing" });
+  await withServer(file, async (base) => {
+    const res = await fetch(base + "/export");
+    assert.equal(res.status, 200);
+    const text = await res.text();
+    assert.equal(text, banny(file, "export").stdout);
+    assert.deepEqual(JSON.parse(text).columns.map((c) => c.name), ["Doing"]);
+  });
+});

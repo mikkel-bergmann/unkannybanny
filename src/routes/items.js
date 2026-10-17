@@ -15,6 +15,13 @@ function requireJson(req, res, next) {
   next();
 }
 
+async function requireColumn(store, columnId) {
+  if (columnId === null || columnId === undefined) return;
+  if (!(await store.getColumn(columnId))) {
+    throw new ItemValidationError(`columnId names no column: ${columnId}`);
+  }
+}
+
 export default function itemsRouter(store) {
   const router = Router();
   const notFound = (res, id) => sendError(res, 404, "not-found", `no item with id ${id}`);
@@ -24,7 +31,9 @@ export default function itemsRouter(store) {
   }));
 
   router.post("/items", requireJson, express.json(), wrap(async (req, res) => {
-    const item = await store.create(validateNewItem(req.body));
+    const input = validateNewItem(req.body);
+    await requireColumn(store, input.columnId);
+    const item = await store.create(input);
     res.status(201).location("/items/" + item.id).json(item);
   }));
 
@@ -35,7 +44,9 @@ export default function itemsRouter(store) {
   }));
 
   router.patch("/items/:id", requireJson, express.json(), wrap(async (req, res) => {
-    const item = await store.update(req.params.id, validateItemPatch(req.body));
+    const patch = validateItemPatch(req.body);
+    if ("columnId" in patch) await requireColumn(store, patch.columnId);
+    const item = await store.update(req.params.id, patch);
     if (!item) return notFound(res, req.params.id);
     res.json(item);
   }));

@@ -6,7 +6,7 @@ export class ItemValidationError extends Error {
   }
 }
 
-const KEYS = ["title", "done", "tags"];
+const KEYS = ["title", "done", "tags", "columnId"];
 const TAG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 function checkObject(input) {
@@ -41,29 +41,42 @@ function checkTags(tags) {
   }
 }
 
+function checkColumnId(columnId) {
+  if (columnId !== null && (typeof columnId !== "string" || columnId.length === 0)) {
+    throw new ItemValidationError("columnId must be null or a non-empty string");
+  }
+}
+
 function checkPresent(input) {
   if ("title" in input) checkTitle(input.title);
   if ("done" in input) checkDone(input.done);
   if ("tags" in input) checkTags(input.tags);
+  if ("columnId" in input) checkColumnId(input.columnId);
 }
 
 export function validateNewItem(input) {
   checkObject(input);
   if (!("title" in input)) throw new ItemValidationError("title is required");
   checkPresent(input);
-  const { title, done, tags } = input;
-  return { title: title.trim(), done: done ?? false, tags: tags ? [...tags] : [] };
+  const { title, done, tags, columnId } = input;
+  return {
+    title: title.trim(),
+    done: done ?? false,
+    tags: tags ? [...tags] : [],
+    columnId: columnId ?? null,
+  };
 }
 
 export function validateItemPatch(input) {
   checkObject(input);
   if (!KEYS.some((k) => k in input)) {
-    throw new ItemValidationError("patch must set title, done, or tags");
+    throw new ItemValidationError("patch must set title, done, tags, or columnId");
   }
   checkPresent(input);
   const out = {};
   if ("title" in input) out.title = input.title.trim();
   if ("done" in input) out.done = input.done;
   if ("tags" in input) out.tags = [...input.tags];
+  if ("columnId" in input) out.columnId = input.columnId;
   return out;
 }

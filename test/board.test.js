@@ -62,7 +62,16 @@ test("static mount follows every router and precedes noRoute", async () => {
 test("the page has the fixed ids and a single inline script", async () => {
   const { base } = await start();
   const body = await (await fetch(`${base}/`)).text();
-  for (const id of ["add-form", "add-title", "add-tags", "tag-filter", "item-list", "status"]) {
+  for (const id of [
+    "add-form",
+    "add-title",
+    "add-tags",
+    "tag-filter",
+    "column-add-form",
+    "column-add-name",
+    "item-list",
+    "status",
+  ]) {
     assert.ok(body.includes(`id="${id}"`), id);
   }
   assert.ok(body.includes('role="status"'));
@@ -72,7 +81,7 @@ test("the page has the fixed ids and a single inline script", async () => {
   }
   const src = body.match(/<script>([\s\S]*?)<\/script>/)[1];
   assert.doesNotThrow(() => new vm.Script(src));
-  for (const needle of ["fetch", '"/items"', '"/tags"', "?tag=", '"POST"', '"PATCH"']) {
+  for (const needle of ["fetch", '"/items"', '"/tags"', '"/columns"', "?tag=", '"POST"', '"PATCH"']) {
     assert.ok(src.includes(needle), needle);
   }
 });

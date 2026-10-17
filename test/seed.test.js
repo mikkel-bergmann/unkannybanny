@@ -28,16 +28,27 @@ const TITLES = [
   "Plan the banana bread bake-off",
 ];
 
-test("verb table holds seven verbs in order and runs none on import", async () => {
+test("verb table holds ten verbs in order and runs none on import", async () => {
   const { commands } = await import("../bin/banny.js");
-  assert.deepEqual(Object.keys(commands), ["list", "add", "done", "remove", "seed", "export", "stats"]);
+  assert.deepEqual(Object.keys(commands), [
+    "list",
+    "add",
+    "done",
+    "remove",
+    "seed",
+    "export",
+    "stats",
+    "columns",
+    "column",
+    "move",
+  ]);
 });
 
-test("--help lists all seven verbs", async () => {
+test("--help lists all ten verbs", async () => {
   const { file } = await tmpFile();
   const r = banny(file, "--help");
   assert.equal(r.status, 0);
-  for (const verb of ["list", "add", "done", "remove", "seed", "export", "stats"]) {
+  for (const verb of ["list", "add", "done", "remove", "seed", "export", "stats", "columns", "column", "move"]) {
     assert.match(r.stdout, new RegExp(verb));
   }
 });

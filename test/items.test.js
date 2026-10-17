@@ -12,7 +12,18 @@ function invalid(fn) {
 }
 
 test("validateNewItem trims the title and applies defaults", () => {
-  assert.deepEqual(validateNewItem({ title: "  milk  " }), { title: "milk", done: false, tags: [] });
+  assert.deepEqual(validateNewItem({ title: "  milk  " }), {
+    title: "milk",
+    done: false,
+    tags: [],
+    columnId: null,
+  });
+});
+
+test("validateNewItem keeps a column id and rejects a bad one", () => {
+  assert.equal(validateNewItem({ title: "milk", columnId: "c1" }).columnId, "c1");
+  invalid(() => validateNewItem({ title: "a", columnId: "" }));
+  invalid(() => validateNewItem({ title: "a", columnId: 1 }));
 });
 
 test("validateNewItem rejects shape violations", () => {
@@ -42,9 +53,12 @@ test("validateNewItem accepts boundary values", () => {
 
 test("validateItemPatch keeps only provided keys", () => {
   assert.deepEqual(validateItemPatch({ done: true }), { done: true });
+  assert.deepEqual(validateItemPatch({ columnId: null }), { columnId: null });
+  assert.deepEqual(validateItemPatch({ columnId: "c1" }), { columnId: "c1" });
   assert.deepEqual(validateItemPatch({ title: " b " }), { title: "b" });
   invalid(() => validateItemPatch({}));
   invalid(() => validateItemPatch({ createdAt: "y" }));
+  invalid(() => validateItemPatch({ columnId: "" }));
 });
 
 const servers = [];
@@ -162,4 +176,31 @@ test("charset parameter is accepted", async () => {
     "content-type": "application/json; charset=utf-8",
   });
   assert.equal(res.status, 201);
+});
+
+test("create in a column and refuse an unknown column", async () => {
+  const { base } = await start();
+  const column = await (await send(base, "POST", "/columns", '{"name":"Doing"}')).json();
+  const created = await send(base, "POST", "/items", JSON.stringify({ title: "milk", columnId: column.id }));
+  assert.equal(created.status, 201);
+  assert.equal((await created.json()).columnId, column.id);
+  const bad = await send(base, "POST", "/items", JSON.stringify({ title: "bread", columnId: "nope" }));
+  assert.equal(bad.status, 400);
+  assert.equal((await bad.json()).error.code, "invalid-item");
+  const list = await (await fetch(`${base}/items`)).json();
+  assert.deepEqual(list.items.map((i) => i.title), ["milk"]);
+});
+
+test("patch clears a column id and refuses an unknown one", async () => {
+  const { base } = await start();
+  const column = await (await send(base, "POST", "/columns", '{"name":"Doing"}')).json();
+  const item = await (
+    await send(base, "POST", "/items", JSON.stringify({ title: "milk", columnId: column.id }))
+  ).json();
+  const cleared = await send(base, "PATCH", `/items/${item.id}`, '{"columnId":null}');
+  assert.equal(cleared.status, 200);
+  assert.equal((await cleared.json()).columnId, null);
+  const bogus = await send(base, "PATCH", `/items/${item.id}`, '{"columnId":"nope"}');
+  assert.equal(bogus.status, 400);
+  assert.equal((await bogus.json()).error.code, "invalid-item");
 });

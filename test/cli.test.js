@@ -203,3 +203,66 @@ test("a corrupt store exits 1 and is left alone", async () => {
   assert.equal(JSON.parse(r.stderr).error.code, "store-corrupt");
   assert.equal(await fs.readFile(file, "utf8"), "not json");
 });
+
+test("columns lists, adds, renames, moves, and removes", async () => {
+  const { file } = await tmpFile();
+  assert.equal(banny(file, "columns").stdout, "");
+  const added = banny(file, "column", "add", "Backlog");
+  assert.equal(added.status, 0);
+  const backlog = JSON.parse(banny(file, "columns", "--json").stdout).columns[0];
+  assert.equal(added.stdout, `${backlog.id}  Backlog\n`);
+  const doing = JSON.parse(banny(file, "column", "add", "Doing", "--json").stdout);
+  const done = JSON.parse(banny(file, "column", "add", "Done", "--json").stdout);
+  const moved = banny(file, "column", "move", done.id, "1");
+  assert.equal(moved.status, 0);
+  assert.deepEqual(
+    JSON.parse(banny(file, "columns", "--json").stdout).columns.map((c) => c.name),
+    ["Done", "Backlog", "Doing"],
+  );
+  const renamed = banny(file, "column", "rename", doing.id, "In", "progress", "--json");
+  assert.equal(renamed.status, 0);
+  assert.equal(JSON.parse(renamed.stdout).name, "In progress");
+  const removed = banny(file, "column", "remove", done.id);
+  assert.equal(removed.status, 0);
+  assert.equal(removed.stdout, `removed ${done.id}\n`);
+  assert.equal(banny(file, "column", "remove", done.id).status, 4);
+});
+
+test("column usage errors exit 2", async () => {
+  const { file } = await tmpFile();
+  for (const args of [
+    ["column"],
+    ["column", "add"],
+    ["column", "rename", "x"],
+    ["column", "move", "x"],
+    ["columns", "extra"],
+  ]) {
+    const r = banny(file, ...args);
+    assert.equal(r.status, 2, args.join(" "));
+    assert.equal(r.stdout, "");
+  }
+  const col = JSON.parse(banny(file, "column", "add", "Doing", "--json").stdout);
+  assert.equal(banny(file, "column", "move", col.id, "5").status, 2);
+  assert.equal(banny(file, "column", "move", col.id, "x").status, 2);
+});
+
+test("move sets and clears an item column", async () => {
+  const { file } = await tmpFile();
+  const column = JSON.parse(banny(file, "column", "add", "Doing", "--json").stdout);
+  const item = JSON.parse(banny(file, "add", "milk", "--json").stdout);
+  const moved = banny(file, "move", item.id, column.id);
+  assert.equal(moved.status, 0);
+  assert.equal(moved.stdout, `${item.id}  [ ] milk\n`);
+  assert.equal(JSON.parse(await fs.readFile(file, "utf8")).items[0].columnId, column.id);
+  const none = banny(file, "move", item.id, "--none");
+  assert.equal(none.status, 0);
+  assert.equal(JSON.parse(await fs.readFile(file, "utf8")).items[0].columnId, null);
+});
+
+test("move with unknown ids exits 4", async () => {
+  const { file } = await tmpFile();
+  const column = JSON.parse(banny(file, "column", "add", "Doing", "--json").stdout);
+  const item = JSON.parse(banny(file, "add", "milk", "--json").stdout);
+  assert.equal(banny(file, "move", "no-such-item", column.id).status, 4);
+  assert.equal(banny(file, "move", item.id, "no-such-column").status, 4);
+});

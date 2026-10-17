@@ -81,7 +81,15 @@ test("create assigns a UUID and equal ISO timestamps", async () => {
   assert.match(item.id, UUID);
   assert.equal(item.createdAt, item.updatedAt);
   assert.equal(new Date(item.createdAt).toISOString(), item.createdAt);
-  assert.deepEqual(Object.keys(item), ["id", "title", "done", "tags", "createdAt", "updatedAt"]);
+  assert.deepEqual(Object.keys(item), [
+    "id",
+    "title",
+    "done",
+    "tags",
+    "columnId",
+    "createdAt",
+    "updatedAt",
+  ]);
 });
 
 test("update ignores id and createdAt in the patch", async () => {
@@ -173,4 +181,76 @@ test("the data directory is ignored by git", () => {
   const root = fileURLToPath(new URL("..", import.meta.url));
   const result = spawnSync("git", ["check-ignore", "-q", "data/banny.json"], { cwd: root });
   assert.equal(result.status, 0);
+});
+
+test("columns list empty for a missing file and for a file without columns", async () => {
+  const missing = createStore({ path: path.join(await tmpDir(), "banny.json") });
+  assert.deepEqual(await missing.listColumns(), []);
+  const file = path.join(await tmpDir(), "banny.json");
+  await fs.writeFile(file, JSON.stringify({ items: [{ id: "1", title: "a", done: false, tags: [], createdAt: "c", updatedAt: "c" }] }));
+  const store = createStore({ path: file });
+  assert.deepEqual(await store.listColumns(), []);
+  assert.equal((await store.list()).length, 1);
+});
+
+test("createColumn assigns a UUID and equal ISO timestamps", async () => {
+  const file = path.join(await tmpDir(), "banny.json");
+  const store = createStore({ path: file });
+  const column = await store.createColumn({ name: "Backlog" });
+  assert.match(column.id, UUID);
+  assert.equal(column.name, "Backlog");
+  assert.equal(column.createdAt, column.updatedAt);
+  assert.deepEqual(Object.keys(column), ["id", "name", "createdAt", "updatedAt"]);
+  const parsed = JSON.parse(await fs.readFile(file, "utf8"));
+  assert.deepEqual(parsed.columns, [column]);
+});
+
+test("updateColumn changes only name and updatedAt", async () => {
+  const store = createStore({ path: path.join(await tmpDir(), "banny.json") });
+  const column = await store.createColumn({ name: "Backlog" });
+  const updated = await store.updateColumn(column.id, { name: "Doing", id: "x" });
+  assert.equal(updated.name, "Doing");
+  assert.equal(updated.id, column.id);
+  assert.equal(updated.createdAt, column.createdAt);
+  assert.ok(updated.updatedAt >= updated.createdAt);
+  assert.equal(await store.updateColumn("no-such-id", { name: "x" }), null);
+});
+
+test("removeColumn unassigns its items", async () => {
+  const store = createStore({ path: path.join(await tmpDir(), "banny.json") });
+  const column = await store.createColumn({ name: "Doing" });
+  const item = await store.create({ title: "milk", done: false, tags: [], columnId: column.id });
+  assert.equal(await store.removeColumn(column.id), true);
+  assert.deepEqual(await store.listColumns(), []);
+  assert.equal((await store.get(item.id)).columnId, null);
+  assert.equal(await store.removeColumn(column.id), false);
+});
+
+test("reorderColumns applies a permutation and rejects anything else", async () => {
+  const store = createStore({ path: path.join(await tmpDir(), "banny.json") });
+  const a = await store.createColumn({ name: "a" });
+  const b = await store.createColumn({ name: "b" });
+  assert.equal(await store.reorderColumns([a.id]), null);
+  assert.equal(await store.reorderColumns([a.id, a.id]), null);
+  assert.equal(await store.reorderColumns([a.id, "nope"]), null);
+  assert.deepEqual((await store.listColumns()).map((c) => c.name), ["a", "b"]);
+  const reordered = await store.reorderColumns([b.id, a.id]);
+  assert.deepEqual(reordered.map((c) => c.name), ["b", "a"]);
+  assert.deepEqual((await store.listColumns()).map((c) => c.name), ["b", "a"]);
+});
+
+test("returned columns are copies", async () => {
+  const store = createStore({ path: path.join(await tmpDir(), "banny.json") });
+  await store.createColumn({ name: "orig" });
+  const first = await store.listColumns();
+  first[0].name = "changed";
+  assert.equal((await store.listColumns())[0].name, "orig");
+});
+
+test("a board with no columns writes the original items-only shape", async () => {
+  const file = path.join(await tmpDir(), "banny.json");
+  const store = createStore({ path: file });
+  await store.create(sample);
+  const parsed = JSON.parse(await fs.readFile(file, "utf8"));
+  assert.deepEqual(Object.keys(parsed), ["items"]);
 });
