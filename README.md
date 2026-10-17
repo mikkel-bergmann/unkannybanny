@@ -16,6 +16,19 @@ npm start
 The server listens on `http://127.0.0.1:4321/` (override the port with
 `PORT`). `GET /health` returns `{"status":"ok"}`.
 
+## Try it
+
+```sh
+npm ci
+npm start                              # board on http://127.0.0.1:4321/
+node bin/banny.js seed                 # add sample items (only if the store is empty)
+node bin/banny.js list                 # list them
+node bin/banny.js export > banny-export.json
+curl http://127.0.0.1:4321/export      # the same export over HTTP
+```
+
+Items live in `data/banny.json`; set `BANNY_DATA` to use another file.
+
 ## Run the tests
 
 ```sh
