@@ -1,6 +1,6 @@
 import express, { Router } from "express";
 import { filterItems, InvalidQueryError } from "./tags.js";
-import { validateNewItem, validateItemPatch, ItemValidationError } from "../items.js";
+import { validateNewItem, validateItemPatch, validateItemMove, ItemValidationError } from "../items.js";
 
 function sendError(res, status, code, message) {
   res.status(status).json({ error: { code, message } });
@@ -47,6 +47,23 @@ export default function itemsRouter(store) {
     const patch = validateItemPatch(req.body);
     if ("columnId" in patch) await requireColumn(store, patch.columnId);
     const item = await store.update(req.params.id, patch);
+    if (!item) return notFound(res, req.params.id);
+    res.json(item);
+  }));
+
+  router.post("/items/:id/move", requireJson, express.json(), wrap(async (req, res) => {
+    const input = validateItemMove(req.body);
+    if (!(await store.get(req.params.id))) return notFound(res, req.params.id);
+    await requireColumn(store, input.columnId);
+    if (input.before !== null) {
+      const target = await store.get(input.before);
+      if (!target) throw new ItemValidationError(`before names no item: ${input.before}`);
+      if (target.id === req.params.id) throw new ItemValidationError("before must not be the moved item");
+      if (target.columnId !== input.columnId) {
+        throw new ItemValidationError("before must be in the target column");
+      }
+    }
+    const item = await store.moveItem(req.params.id, input);
     if (!item) return notFound(res, req.params.id);
     res.json(item);
   }));

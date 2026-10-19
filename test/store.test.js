@@ -254,3 +254,52 @@ test("a board with no columns writes the original items-only shape", async () =>
   const parsed = JSON.parse(await fs.readFile(file, "utf8"));
   assert.deepEqual(Object.keys(parsed), ["items"]);
 });
+
+test("moveItem places an item within a lane", async () => {
+  const store = createStore({ path: path.join(await tmpDir(), "banny.json") });
+  const k = "col-k";
+  const a = await store.create({ ...sample, title: "a", columnId: k });
+  const b = await store.create({ ...sample, title: "b", columnId: k });
+  const c = await store.create({ ...sample, title: "c", columnId: k });
+  const moved = await store.moveItem(c.id, { columnId: k, before: a.id });
+  assert.equal(moved.id, c.id);
+  assert.deepEqual((await store.list()).map((i) => i.id), [c.id, a.id, b.id]);
+});
+
+test("moveItem moves across lanes and sets the column", async () => {
+  const store = createStore({ path: path.join(await tmpDir(), "banny.json") });
+  const a = await store.create({ ...sample, title: "a", columnId: "col-k" });
+  const b = await store.create({ ...sample, title: "b", columnId: "col-k" });
+  const x = await store.create({ ...sample, title: "x", columnId: "col-m" });
+  await store.moveItem(x.id, { columnId: "col-k", before: b.id });
+  const list = await store.list();
+  assert.deepEqual(list.map((i) => i.id), [a.id, x.id, b.id]);
+  assert.equal(list[1].columnId, "col-k");
+});
+
+test("moveItem with null before appends and handles unassigned items", async () => {
+  const store = createStore({ path: path.join(await tmpDir(), "banny.json") });
+  const a = await store.create({ ...sample, title: "a" });
+  const b = await store.create({ ...sample, title: "b" });
+  await store.moveItem(a.id, { columnId: null, before: null });
+  assert.deepEqual((await store.list()).map((i) => i.id), [b.id, a.id]);
+});
+
+test("moveItem on an unknown id resolves null and writes nothing", async () => {
+  const file = path.join(await tmpDir(), "banny.json");
+  const store = createStore({ path: file });
+  await store.create(sample);
+  const text = await fs.readFile(file, "utf8");
+  assert.equal(await store.moveItem("no-such-id", { columnId: null, before: null }), null);
+  assert.equal(await fs.readFile(file, "utf8"), text);
+});
+
+test("a hand-written file keeps its order and is not rewritten", async () => {
+  const file = path.join(await tmpDir(), "banny.json");
+  const mk = (id) => ({ id, title: id, done: false, tags: [], columnId: null, createdAt: "t", updatedAt: "t" });
+  const text = JSON.stringify({ items: [mk("a"), mk("b"), mk("c")] });
+  await fs.writeFile(file, text);
+  const store = createStore({ path: file });
+  assert.deepEqual((await store.list()).map((i) => i.id), ["a", "b", "c"]);
+  assert.equal(await fs.readFile(file, "utf8"), text);
+});

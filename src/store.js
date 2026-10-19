@@ -115,6 +115,18 @@ export function createStore({ path } = {}) {
         await commit(copy);
         return structuredClone(next);
       }),
+    moveItem: (id, { columnId, before } = {}) =>
+      run(async () => {
+        const index = items.findIndex((i) => i.id === id);
+        if (index === -1) return null;
+        const next = { ...items[index], columnId, updatedAt: new Date().toISOString() };
+        const rest = items.filter((i) => i.id !== id);
+        const at = before == null ? -1 : rest.findIndex((i) => i.id === before);
+        if (at === -1) rest.push(next);
+        else rest.splice(at, 0, next);
+        await commit(rest);
+        return structuredClone(next);
+      }),
     remove: (id) =>
       run(async () => {
         if (!items.some((i) => i.id === id)) return false;
