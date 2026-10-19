@@ -53,6 +53,7 @@ export default function itemsRouter(store) {
 
   router.post("/items/:id/move", requireJson, express.json(), wrap(async (req, res) => {
     const input = validateItemMove(req.body);
+    if (!(await store.get(req.params.id))) return notFound(res, req.params.id);
     await requireColumn(store, input.columnId);
     if (input.before !== null) {
       const target = await store.get(input.before);

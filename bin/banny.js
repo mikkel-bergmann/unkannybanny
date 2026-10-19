@@ -181,10 +181,10 @@ export const commands = {
       }
       const id = args[0];
       const columnId = values.none ? null : args[1];
+      if (!(await store.get(id))) throw new NotFoundError(`no item with id ${id}`);
       if (columnId !== null && !(await store.getColumn(columnId))) {
         throw new NotFoundError(`no column with id ${columnId}`);
       }
-      if (!(await store.get(id))) throw new NotFoundError(`no item with id ${id}`);
       const before = values.before ?? null;
       if (before !== null) {
         const target = await store.get(before);

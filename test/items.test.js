@@ -252,6 +252,8 @@ test("POST /items/:id/move answers 404 and 415", async () => {
   const { base, x } = await moveFixture();
   const missing = await send(base, "POST", "/items/no-such-id/move", '{"columnId":null}');
   assert.equal(missing.status, 404);
+  const missingColumn = await send(base, "POST", "/items/no-such-id/move", '{"columnId":"nope"}');
+  assert.equal(missingColumn.status, 404);
   const text = await send(base, "POST", `/items/${x.id}/move`, '{"columnId":null}', { "content-type": "text/plain" });
   assert.equal(text.status, 415);
 });
