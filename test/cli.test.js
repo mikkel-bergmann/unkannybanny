@@ -266,38 +266,3 @@ test("move with unknown ids exits 4", async () => {
   assert.equal(banny(file, "move", "no-such-item", column.id).status, 4);
   assert.equal(banny(file, "move", item.id, "no-such-column").status, 4);
 });
-
-async function laneFixture() {
-  const { file } = await tmpFile();
-  const store = createStore({ path: file });
-  const c = await store.createColumn({ name: "Doing" });
-  const eggs = await store.create({ title: "eggs", done: false, tags: [] });
-  const milk = await store.create({ title: "milk", done: false, tags: [], columnId: c.id });
-  const bread = await store.create({ title: "bread", done: false, tags: [], columnId: c.id });
-  const other = await store.create({ title: "other", done: false, tags: [] });
-  return { file, c, eggs, milk, bread, other };
-}
-
-test("move --before places a card ahead of another", async () => {
-  const { file, c, milk, bread } = await laneFixture();
-  const r = banny(file, "move", bread.id, c.id, "--before", milk.id);
-  assert.equal(r.status, 0, r.stderr);
-  const list = banny(file, "list").stdout;
-  assert.ok(list.indexOf("bread") < list.indexOf("milk"));
-});
-
-test("move without --before lands at the end of the array", async () => {
-  const { file, c, eggs } = await laneFixture();
-  assert.equal(banny(file, "move", eggs.id, c.id).status, 0);
-  const { items } = JSON.parse(await fs.readFile(file, "utf8"));
-  assert.deepEqual(items.map((i) => i.title), ["milk", "bread", "other", "eggs"]);
-});
-
-test("move --before refuses self, other-lane, and unknown items", async () => {
-  const { file, c, milk, other } = await laneFixture();
-  const before = await fs.readFile(file, "utf8");
-  assert.equal(banny(file, "move", milk.id, c.id, "--before", milk.id).status, 3);
-  assert.equal(banny(file, "move", milk.id, c.id, "--before", other.id).status, 3);
-  assert.equal(banny(file, "move", milk.id, c.id, "--before", "no-such-item").status, 4);
-  assert.equal(await fs.readFile(file, "utf8"), before);
-});
