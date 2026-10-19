@@ -257,3 +257,27 @@ test("POST /items/:id/move answers 404 and 415", async () => {
   const text = await send(base, "POST", `/items/${x.id}/move`, '{"columnId":null}', { "content-type": "text/plain" });
   assert.equal(text.status, 415);
 });
+
+test("a column removed during a move is refused", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "banny-"));
+  const store = createStore({ path: path.join(dir, "banny.json") });
+  const k = await store.createColumn({ name: "k" });
+  const x = await store.create({ title: "x", done: false, tags: [], columnId: null });
+  const wrapped = {
+    ...store,
+    moveItem: (id, input) => {
+      store.removeColumn(k.id);
+      return store.moveItem(id, input);
+    },
+  };
+  const app = createApp({ store: wrapped });
+  const server = await new Promise((resolve) => {
+    const s = app.listen(0, "127.0.0.1", () => resolve(s));
+  });
+  servers.push(server);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const res = await send(base, "POST", `/items/${x.id}/move`, JSON.stringify({ columnId: k.id }));
+  assert.equal(res.status, 400);
+  assert.equal((await res.json()).error.code, "invalid-item");
+  assert.equal((await store.get(x.id)).columnId, null);
+});

@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import { createStore } from "../src/store.js";
 import { serializeExport } from "../src/routes/export.js";
 import { computeStats } from "../src/routes/stats.js";
-import { validateNewItem, validateItemPatch, validateItemMove, ItemValidationError } from "../src/items.js";
+import { validateNewItem, validateItemPatch, ItemValidationError, ItemReferenceError } from "../src/items.js";
 import { validateNewColumn, validateColumnPatch } from "../src/columns.js";
 
 const SAMPLE_ITEMS = Object.freeze([
@@ -181,20 +181,19 @@ export const commands = {
       }
       const id = args[0];
       const columnId = values.none ? null : args[1];
-      if (!(await store.get(id))) throw new NotFoundError(`no item with id ${id}`);
-      if (columnId !== null && !(await store.getColumn(columnId))) {
-        throw new NotFoundError(`no column with id ${columnId}`);
-      }
       const before = values.before ?? null;
-      if (before !== null) {
-        const target = await store.get(before);
-        if (!target) throw new NotFoundError(`no item with id ${before}`);
-        if (before === id) throw new ItemValidationError("before must not be the moved item");
-        if (target.columnId !== columnId) {
-          throw new ItemValidationError("before must be in the target column");
+      let item;
+      try {
+        item = await store.moveItem(id, { columnId, before });
+      } catch (err) {
+        if (err instanceof ItemReferenceError && err.reason === "column") {
+          throw new NotFoundError("no column with id " + columnId);
         }
+        if (err instanceof ItemReferenceError && err.reason === "before-missing") {
+          throw new NotFoundError("no item with id " + before);
+        }
+        throw err;
       }
-      const item = await store.moveItem(id, validateItemMove({ columnId, before }));
       if (!item) throw new NotFoundError(`no item with id ${id}`);
       return { json: item, text: formatItem(item) };
     },

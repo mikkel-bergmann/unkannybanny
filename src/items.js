@@ -6,6 +6,15 @@ export class ItemValidationError extends Error {
   }
 }
 
+export class ItemReferenceError extends ItemValidationError {
+  constructor(reason, ref, message) {
+    super(message);
+    this.name = "ItemReferenceError";
+    this.reason = reason;
+    this.ref = ref;
+  }
+}
+
 const KEYS = ["title", "done", "tags", "columnId"];
 const TAG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
