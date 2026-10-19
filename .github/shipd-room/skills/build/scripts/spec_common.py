@@ -78,12 +78,21 @@ PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9]+(?:[-_.][A-Za-z0-9]+)*$")
 
 # Plan header metadata (shipd-spec-format plan-header-metadata-lines): the optional
 # block is the contiguous run of ``<Key>: <value>`` lines immediately after the
-# ``Status:`` line, recognizing exactly these five keys; ``Profile`` accepts
+# ``Status:`` line, recognizing exactly these seven keys; ``Profile`` accepts
 # exactly these two values (absent meaning ``full``). ``Fixes`` is repeatable —
 # each line names a shipped change this plan remediates (the post-merge fix
-# linkage the delivery-metrics change-failure signal derives from).
-METADATA_KEYS = ("Profile", "Epic", "Initiative", "Theme", "Fixes")
+# linkage the delivery-metrics change-failure signal derives from). The two
+# hyphenated stamp keys (context-gate plan-stamp-write) are written only by the
+# context gate on a passing run: ``Planned-at`` is the merge-base commit the
+# plan was gated against, ``Gated-hash`` the normalized content hash the gate
+# approved. Both are hex-valued, not slugs.
+STAMP_KEYS = ("Planned-at", "Gated-hash")
+METADATA_KEYS = ("Profile", "Epic", "Initiative", "Theme", "Fixes") + STAMP_KEYS
 PROFILES = ("full", "lite")
+# Value shapes of the two stamp keys: an abbreviated-to-full git commit id, and
+# the engine's truncated content hash (``HASH_LENGTH`` lowercase hex chars).
+PLANNED_AT_RE = re.compile(r"^[0-9a-f]{7,40}$")
+GATED_HASH_RE = re.compile(r"^[0-9a-f]{%d}$" % HASH_LENGTH)
 
 # Epic header metadata (shipd-spec-format epic-header-metadata): an epic reuses the
 # plan header grammar (title / ``Status:`` / metadata block) but recognizes a
@@ -111,10 +120,11 @@ SECTION_HEADER_RE = re.compile(r"^##\s+(.*?)\s*$")
 TABLE_SEPARATOR_CELL_RE = re.compile(r"^:?-+:?$")
 
 PLAN_STATUS_LINE_RE = re.compile(r"^Status:\s*(.*?)\s*$")
-# A single ``<Key>: <value>`` metadata line: the key is one bareword (no
-# spaces), the value the trimmed remainder. Unrecognized keys still match so the
-# linter can report them; validation of key and value happens in the linter.
-METADATA_LINE_RE = re.compile(r"^([A-Za-z][A-Za-z0-9]*):\s*(.*?)\s*$")
+# A single ``<Key>: <value>`` metadata line: the key is one bareword of
+# letters, digits, and hyphens (no spaces), the value the trimmed remainder.
+# Unrecognized keys still match so the linter can report them; validation of
+# key and value happens in the linter.
+METADATA_LINE_RE = re.compile(r"^([A-Za-z][A-Za-z0-9-]*):\s*(.*?)\s*$")
 
 
 # ---------------------------------------------------------------------------
@@ -403,7 +413,11 @@ RECOGNIZED_CONFIG_KEYS = (
     "guardrails",
     "lint",
     "memory_dir",
+    "merge",
+    "model",
+    "models",
     "post-worktree-scripts",
+    "pr",
     "pr-mode",
     "room",
     "store_autocommit",
@@ -967,39 +981,79 @@ PIPELINE_PRESETS = ("default", "eco", "basic")
 # The config key naming the autonomous pipeline.
 PIPELINE_KEY = "autonomous-pipeline"
 
-# The model ladder, strongest first: the aliases a symbolic tier steps over
-# (epic-autopilot stage-model-resolution). Single source of truth for every
-# consumer of a pipeline entry's `model` / `subagent_model` option.
-MODEL_LADDER = ("fable", "opus", "sonnet", "haiku")
+# The default model ladder, strongest first: the aliases a symbolic tier steps
+# over when a repository declares no `models` key (epic-autopilot
+# stage-model-resolution). A repository's `models` configuration replaces it.
+# The effort levels a pipeline stage runs at (epic-autopilot
+# stage-model-resolution). Each harness expresses a level with its own knob.
+EFFORT_LEVELS = ("high", "medium", "low")
 
-# The symbolic tiers and how far below the anchor each sits. Mirrors
-# `pipeline_schema.SYMBOLIC_TIERS` on the stdlib side, so resolution never
-# imports the schema module.
-_TIER_STEPS = {"session": 0, "tier-below": 1, "tier-two-below": 2}
+# The built-in level every pipeline stage defaults to: planning and authoring
+# run high, implementation and judgement run medium, and everything else runs
+# low. A pipeline entry's `model` option overrides its stage's level.
+STAGE_EFFORT = {
+    "plan": "high",
+    "enrich": "high",
+    "replan": "high",
+    "epic": "high",
+    "build": "medium",
+    "review": "medium",
+}
+
+# The level a stage the map does not name falls back to.
+DEFAULT_EFFORT = "low"
 
 
-def resolve_model_tier(tier, session_model=None):
-    """Resolve a pipeline entry's ``model``/``subagent_model`` ``tier`` to the
-    concrete value a consumer passes as ``--model`` (epic-autopilot
+def resolve_effort(stage, declared=None):
+    """The effort level ``stage`` runs at (epic-autopilot
     stage-model-resolution). Pure — no config, no environment, no imports.
 
-    ``session`` resolves to ``session_model`` itself, so a ``None`` anchor
-    means "pass no ``--model``" and inherit whatever the CLI defaults to.
-    ``tier-below`` and ``tier-two-below`` resolve to the :data:`MODEL_LADDER`
-    alias one or two positions below the anchor, clamped at the ladder bottom;
-    the anchor is ``session_model`` when it names a ladder alias, else the
-    ladder top — an unknown anchor cannot be positioned on the ladder, so
-    stepping starts from the strongest rung (fail expensive, never weak). Any
-    other non-empty string is a concrete model id and is returned verbatim."""
-    if tier not in _TIER_STEPS:
-        return tier
-    if tier == "session":
-        return session_model
-    if session_model in MODEL_LADDER:
-        index = MODEL_LADDER.index(session_model)
-    else:
-        index = 0
-    return MODEL_LADDER[min(index + _TIER_STEPS[tier], len(MODEL_LADDER) - 1)]
+    ``declared`` (a pipeline entry's ``model`` option) wins when it names
+    ``session`` or an effort level, and is returned verbatim when it is a
+    concrete model id. Otherwise the stage's :data:`STAGE_EFFORT` default
+    applies, falling back to :data:`DEFAULT_EFFORT` for a stage the map does
+    not name."""
+    if declared:
+        return declared
+    return STAGE_EFFORT.get(stage, DEFAULT_EFFORT)
+
+
+def resolve_models(config=None):
+    """The per-level model override a resolved ``config`` declares, else ``{}``
+    (shipd-config model-ladder-key).
+
+    A declared ``models`` value SHALL be a map from an effort level to a
+    non-empty model id; anything else raises :class:`ConfigError` naming
+    ``models`` and the offending value."""
+    if config is None:
+        return {}
+    models = config.get("models")
+    if models is None:
+        return {}
+    if not isinstance(models, dict) or not all(
+            key in EFFORT_LEVELS and isinstance(value, str) and value
+            for key, value in models.items()):
+        raise ConfigError(
+            "config `models` must map effort levels (%s) to non-empty model "
+            "ids, got %r" % (", ".join(EFFORT_LEVELS), models))
+    return dict(models)
+
+
+def resolve_model_base(config=None):
+    """The base model a harness that expresses a level as a model variant
+    appends the level to, else ``None`` (shipd-config model-ladder-key).
+
+    A declared ``model`` value SHALL be a non-empty string; anything else
+    raises :class:`ConfigError` naming ``model`` and the offending value."""
+    if config is None:
+        return None
+    base = config.get("model")
+    if base is None:
+        return None
+    if not isinstance(base, str) or not base:
+        raise ConfigError(
+            "config `model` must be a non-empty model id, got %r" % (base,))
+    return base
 
 
 def resolve_pipeline(root):
@@ -1124,6 +1178,94 @@ def resolve_pr_mode(root):
 
 
 # ---------------------------------------------------------------------------
+# PR title (shipd-config pr-config-key)
+# ---------------------------------------------------------------------------
+
+# The config key holding the PR title template and the ticket pattern.
+PR_KEY = "pr"
+
+# The title template used when no layer declares `pr.title`.
+DEFAULT_PR_TITLE = "{summary}"
+
+# The only placeholders a `pr.title` template may use; it must contain
+# `{summary}`.
+PR_TITLE_PLACEHOLDERS = ("ticket", "summary", "change")
+
+
+BRAND_PREFIX = "\u2615 "
+_BRAND_SKIP = ("fixup!", "squash!", "amend!")
+
+
+def brand_subject(subject):
+    """Prefix a commit or pull request subject with :data:`BRAND_PREFIX`
+    (shipd-brand brand-subject-helper). Returns ``subject`` unchanged when it
+    is empty or whitespace, already starts with the mark ``\u2615`` (so
+    ``\u2615 ``, ``\u2615`` with no space, and the legacy ``\u2615 Shipd: ``
+    are never branded twice), or starts with an autosquash marker. Not
+    configurable."""
+    if not subject or not subject.strip():
+        return subject
+    if subject.startswith(BRAND_PREFIX.rstrip()):
+        return subject
+    if subject.startswith(_BRAND_SKIP):
+        return subject
+    return BRAND_PREFIX + subject
+
+
+def resolve_pr(root):
+    """Resolve the PR title settings for ``root`` (shipd-config
+    pr-config-key) as ``(title, ticket_pattern)``.
+
+    Reads the ``pr`` key from ``root``'s layered configuration (via
+    :func:`resolve_config`). Returns ``(DEFAULT_PR_TITLE, None)`` when no
+    layer declares it; a declared object supplies ``title`` (a string using
+    only the :data:`PR_TITLE_PLACEHOLDERS` and containing ``{summary}``) and
+    ``ticket_pattern`` (a string holding a compilable regular expression),
+    each defaulting when absent. A value that is not an object, or a member of
+    the wrong shape, raises :class:`ConfigError` naming ``pr``, the member,
+    and the config file that supplied it. Other members are ignored.
+    Stdlib-only."""
+    config, prov = resolve_config(root)
+    if PR_KEY not in config:
+        return DEFAULT_PR_TITLE, None
+    raw = config[PR_KEY]
+    source = prov.get(PR_KEY, "default")
+    if not isinstance(raw, dict):
+        raise ConfigError(
+            "`%s` must be an object with `title` and `ticket_pattern` "
+            "members (from %s), got %r" % (PR_KEY, source, raw))
+    title = DEFAULT_PR_TITLE
+    if "title" in raw:
+        title = raw["title"]
+        if not isinstance(title, str):
+            raise ConfigError(
+                "`%s.title` must be a string (from %s), got %r"
+                % (PR_KEY, source, title))
+        names = re.findall(r"\{([^{}]*)\}", title)
+        bad = [n for n in names if n not in PR_TITLE_PLACEHOLDERS]
+        if bad or "summary" not in names:
+            raise ConfigError(
+                "`%s.title` must contain {summary} and use only the "
+                "placeholders %s (from %s), got %r"
+                % (PR_KEY, ", ".join("{%s}" % n for n in PR_TITLE_PLACEHOLDERS),
+                   source, title))
+    pattern = None
+    if "ticket_pattern" in raw:
+        pattern = raw["ticket_pattern"]
+        if not isinstance(pattern, str):
+            raise ConfigError(
+                "`%s.ticket_pattern` must be a string (from %s), got %r"
+                % (PR_KEY, source, pattern))
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            raise ConfigError(
+                "`%s.ticket_pattern` must be a valid regular expression "
+                "(from %s): %s" % (PR_KEY, source, exc))
+    return title, pattern
+
+
+# ---------------------------------------------------------------------------
 # PR room (shipd-config room-config-key)
 # ---------------------------------------------------------------------------
 
@@ -1172,6 +1314,82 @@ def resolve_room(root):
                 "`%s.max_rounds` must be an integer of at least 1 (from %s), "
                 "got %r" % (ROOM_KEY, source, max_rounds))
     return agent, max_rounds
+
+
+# ---------------------------------------------------------------------------
+# Merge rules (shipd-config merge-config-key)
+# ---------------------------------------------------------------------------
+
+# The config key declaring the repository's merge rules.
+MERGE_KEY = "merge"
+
+# The value of each `merge` member when no layer declares it.
+DEFAULT_MERGE = {
+    "approvals": 2,
+    "dismiss_stale": True,
+    "last_push_approval": True,
+    "required_checks": ["ci", "semantic-review"],
+    "thread_resolution": True,
+    "strict": False,
+}
+
+_MERGE_BOOL_MEMBERS = (
+    "dismiss_stale", "last_push_approval", "thread_resolution", "strict")
+
+
+def resolve_merge(root):
+    """Resolve the merge rules for ``root`` (shipd-config merge-config-key)
+    as a dict of all six members of :data:`DEFAULT_MERGE`.
+
+    Reads the ``merge`` key from ``root``'s layered configuration (via
+    :func:`resolve_config`); each member defaults when absent. A value that
+    is not an object, a member of the wrong type or range, or a member other
+    than the six raises :class:`ConfigError` naming ``merge``, the member, and
+    the config file that supplied it. Unknown members are rejected because a
+    typo would silently weaken a security rule. Stdlib-only."""
+    config, prov = resolve_config(root)
+    result = dict(DEFAULT_MERGE)
+    result["required_checks"] = list(DEFAULT_MERGE["required_checks"])
+    if MERGE_KEY not in config:
+        return result
+    raw = config[MERGE_KEY]
+    source = prov.get(MERGE_KEY, "default")
+    if not isinstance(raw, dict):
+        raise ConfigError(
+            "`%s` must be an object with members %s (from %s), got %r"
+            % (MERGE_KEY, ", ".join(sorted(DEFAULT_MERGE)), source, raw))
+    for member in raw:
+        if member not in DEFAULT_MERGE:
+            raise ConfigError(
+                "`%s.%s` is not a recognized member; expected one of %s "
+                "(from %s)" % (MERGE_KEY, member,
+                               ", ".join(sorted(DEFAULT_MERGE)), source))
+    if "approvals" in raw:
+        val = raw["approvals"]
+        if isinstance(val, bool) or not isinstance(val, int) \
+                or not 0 <= val <= 10:
+            raise ConfigError(
+                "`%s.approvals` must be an integer from 0 to 10 (from %s), "
+                "got %r" % (MERGE_KEY, source, val))
+        result["approvals"] = val
+    for member in _MERGE_BOOL_MEMBERS:
+        if member in raw:
+            val = raw[member]
+            if not isinstance(val, bool):
+                raise ConfigError(
+                    "`%s.%s` must be true or false (from %s), got %r"
+                    % (MERGE_KEY, member, source, val))
+            result[member] = val
+    if "required_checks" in raw:
+        val = raw["required_checks"]
+        if not isinstance(val, list) or any(
+                not isinstance(c, str) or not c.strip() for c in val) \
+                or len(set(val)) != len(val):
+            raise ConfigError(
+                "`%s.required_checks` must be a list of distinct non-empty "
+                "strings (from %s), got %r" % (MERGE_KEY, source, val))
+        result["required_checks"] = list(val)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1583,7 +1801,8 @@ def wiki_autocommit(store_dir, paths, subject, config_anchor=None):
             if add.returncode != 0:
                 raise RuntimeError(add.stderr.strip() or "git add failed")
             commit = subprocess.run(
-                ["git", "-C", store_dir, "commit", "-m", subject, "--", *paths],
+                ["git", "-C", store_dir, "commit", "-m", brand_subject(subject),
+                 "--", *paths],
                 capture_output=True, text=True)
             if commit.returncode != 0:
                 raise RuntimeError(commit.stderr.strip() or "git commit failed")
@@ -3038,6 +3257,157 @@ def parse_plan_metadata(text):
     return pairs
 
 
+# Cited tokens (spec-status drift-verb). A backticked token shaped like a
+# repository path: two or more ``/``-separated components of path characters,
+# with an optional ``./`` prefix. A leading ``/`` (absolute) and any ``://``
+# (a URL) are deliberately excluded so readers stay bounded to repo-relative
+# paths. The gate's task-path check (context-gate) and the drift verb share
+# these through :func:`cited_paths`.
+BACKTICK_RE = re.compile(r"`([^`]+)`")
+PATH_TOKEN_RE = re.compile(r"^(?:\./)?[\w.-]+(?:/[\w.-]+)+$")
+# A trailing ``:<line>[-<line>]`` citation on a path token.
+LINE_SUFFIX_RE = re.compile(r":\d+(?:-\d+)?$")
+# A trailing call suffix on a symbol token: ``name(args)``.
+CALL_SUFFIX_RE = re.compile(r"\(.*\)$")
+# A cited symbol: an identifier, a dotted name, or a ``--flag``.
+SYMBOL_TOKEN_RE = re.compile(r"^(?:--[A-Za-z][\w-]*|[A-Za-z_][\w.]*)$")
+# Paths every change touches through the plugin version bump, so a commit to
+# them is never drift (spec-status drift-verb); the preflight overlap check
+# reuses this constant.
+VERSION_BUMP_EXEMPT_PATHS = ("plugins/s/.claude-plugin/plugin.json",)
+
+
+def cited_paths(text, strip_line_suffix=False):
+    """Return the path-shaped backticked tokens in ``text`` (spec-status
+    drift-verb), in first-citation order and de-duplicated. A token carrying
+    ``://`` (a URL) or no ``/`` is skipped. With ``strip_line_suffix`` a
+    trailing ``:<line>[-<line>]`` citation is removed before the shape test,
+    so ``src/a.py:12-14`` counts as ``src/a.py``."""
+    out = []
+    seen = set()
+    for token in BACKTICK_RE.findall(text):
+        token = token.strip()
+        if strip_line_suffix:
+            token = LINE_SUFFIX_RE.sub("", token)
+        if token in seen:
+            continue
+        if "/" not in token or "://" in token:
+            continue
+        if not PATH_TOKEN_RE.match(token):
+            continue
+        seen.add(token)
+        out.append(token)
+    return out
+
+
+def cited_symbols(text):
+    """Return the symbol-shaped backticked tokens in ``text`` (spec-status
+    drift-verb) — identifiers, dotted names, and ``--flags`` — in
+    first-citation order and de-duplicated. A trailing call suffix
+    (``name(args)``) is stripped; path-shaped tokens are excluded."""
+    out = []
+    seen = set()
+    for token in BACKTICK_RE.findall(text):
+        token = CALL_SUFFIX_RE.sub("", token.strip())
+        if not token or token in seen:
+            continue
+        if PATH_TOKEN_RE.match(token) or not SYMBOL_TOKEN_RE.match(token):
+            continue
+        seen.add(token)
+        out.append(token)
+    return out
+
+
+def _plan_metadata_block(lines):
+    """Return ``(status_idx, end)`` for a plan's header: the index of the first
+    ``Status:`` line and the index just past its contiguous metadata block.
+    ``status_idx`` is ``None`` when the plan has no ``Status:`` line."""
+    status_idx = next((i for i, ln in enumerate(lines)
+                       if PLAN_STATUS_LINE_RE.match(ln)), None)
+    if status_idx is None:
+        return None, None
+    end = status_idx + 1
+    while end < len(lines):
+        ln = lines[end]
+        if ln.strip() == "" or ln.lstrip().startswith("#"):
+            break
+        if not METADATA_LINE_RE.match(ln):
+            break
+        end += 1
+    return status_idx, end
+
+
+def read_plan_stamp(text):
+    """Return ``(planned_at, gated_hash)`` from a plan's header metadata block
+    (context-gate plan-stamp-write), each ``None`` when its line is absent. The
+    first occurrence of each key wins."""
+    planned_at = gated_hash = None
+    for key, value in parse_plan_metadata(text):
+        if key == "Planned-at" and planned_at is None:
+            planned_at = value
+        elif key == "Gated-hash" and gated_hash is None:
+            gated_hash = value
+    return planned_at, gated_hash
+
+
+def plan_gated_hash(text):
+    """Return the plan stamp's content hash (context-gate plan-stamp-write):
+    the engine's normalized :func:`content_hash` of the plan text with the
+    first ``Status:`` line and every header-block stamp line dropped, so a
+    status move, a re-stamp, or a whitespace-only edit is not a change.
+    Callers pass text with any ``## Context insufficient`` section already
+    stripped."""
+    lines = text.splitlines()
+    status_idx, end = _plan_metadata_block(lines)
+    if status_idx is None:
+        return content_hash(text)
+    kept = []
+    for i, ln in enumerate(lines):
+        if i == status_idx:
+            continue
+        if status_idx < i < end:
+            m = METADATA_LINE_RE.match(ln)
+            if m and m.group(1) in STAMP_KEYS:
+                continue
+        kept.append(ln)
+    return content_hash("\n".join(kept))
+
+
+def write_plan_stamp(text, planned_at, gated_hash):
+    """Return ``text`` with the plan stamp written into its header metadata
+    block (context-gate plan-stamp-write). An existing stamp line is replaced
+    in place (a duplicate is dropped); a missing one is appended, ``Planned-at``
+    first, as the last line(s) of the block — directly after ``Status:`` when
+    no block exists. A ``None`` ``planned_at`` writes no ``Planned-at`` line
+    and removes a stale one. A plan with no ``Status:`` line is returned
+    unchanged."""
+    lines = text.splitlines()
+    status_idx, end = _plan_metadata_block(lines)
+    if status_idx is None:
+        return text
+    values = {"Planned-at": planned_at, "Gated-hash": gated_hash}
+    written = set()
+    block = []
+    for ln in lines[status_idx + 1:end]:
+        m = METADATA_LINE_RE.match(ln)
+        key = m.group(1) if m else None
+        if key in STAMP_KEYS:
+            if values[key] is None or key in written:
+                continue
+            block.append("%s: %s" % (key, values[key]))
+            written.add(key)
+            continue
+        block.append(ln)
+    for key in STAMP_KEYS:
+        if key not in written and values[key] is not None:
+            block.append("%s: %s" % (key, values[key]))
+    new = lines[:status_idx + 1] + block + lines[end:]
+    result = "\n".join(new)
+    if text.endswith("\n"):
+        result += "\n"
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Epic ``## Changes`` stub table (shipd-spec-format epic-artifact-layout)
 # ---------------------------------------------------------------------------
@@ -3145,6 +3515,44 @@ def parse_epic_after(text):
                      if c.strip()]
         result[slug] = after
     return result
+
+
+def find_after_cycle(after_map):
+    """Return the first dependency cycle in ``after_map`` (``{slug: [after,
+    ...]}``, as :func:`parse_epic_after` returns it) as a slug path that
+    repeats its head — ``["a", "b", "a"]``, or ``["a", "a"]`` for a
+    self-edge — or ``[]`` when the map is acyclic. The walk is depth-first
+    over the keys in insertion (table) order and follows only edges whose
+    target is itself a key of the map."""
+    done = set()
+    path = []
+    on_path = {}
+
+    def visit(slug):
+        on_path[slug] = len(path)
+        path.append(slug)
+        for dep in after_map.get(slug, []):
+            if dep not in after_map:
+                continue
+            if dep in on_path:
+                return path[on_path[dep]:] + [dep]
+            if dep in done:
+                continue
+            found = visit(dep)
+            if found:
+                return found
+        path.pop()
+        del on_path[slug]
+        done.add(slug)
+        return []
+
+    for slug in after_map:
+        if slug in done:
+            continue
+        found = visit(slug)
+        if found:
+            return found
+    return []
 
 
 # ---------------------------------------------------------------------------
