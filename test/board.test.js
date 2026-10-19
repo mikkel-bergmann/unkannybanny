@@ -90,7 +90,7 @@ test("the script wires card and column drag types and the move route", async () 
   const { base } = await start();
   const body = await (await fetch(`${base}/`)).text();
   const src = body.match(/<script>([\s\S]*?)<\/script>/)[1];
-  for (const needle of ['"/move"', "application/x-banny-item", "application/x-banny-column", "lane-grip"]) {
+  for (const needle of ['"/move"', "application/x-banny-item", "application/x-banny-column", "lane-grip", "item.columnId === columnId ? item.id : null"]) {
     assert.ok(src.includes(needle), needle);
   }
 });
