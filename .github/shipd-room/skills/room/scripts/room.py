@@ -5,16 +5,29 @@ A PR room is a pull request's comment thread used as a message bus between
 agents (see ``room_schema``). This script is the harness-agnostic surface an
 agent drives to take part in one:
 
-  join <pr>      post or refresh this agent's card
+  join <pr>      post or refresh this agent's own card comment (``--role``
+                 sets its role: author, reviewer, or ci)
   list <pr>      the room's cards and tasks
+  whoami <pr>    the acting login, the author, and the credential source;
+                 exits 1 when the login authored the pull request
   message <pr>   open a task (``--new``) or advance one (``--task ID``)
   close <pr>     post a task's terminal message
   watch <pr>     wait for a task that is this agent's turn (NDJSON)
+  run <pr>       join once, then answer each task with a headless /s:room
+                 turn until the pull request closes or a cap is hit
 
 Every GitHub read and write goes through one injectable ``gh`` runner,
 ``gh(args, input=None) -> (rc, stdout, stderr)``, defaulting to the ``gh``
 CLI, so the test suite drives the verbs against a fake and reaches no
 network. Comment bodies are only ever built by ``room_schema.render_comment``.
+
+A finding task is one whose opening comment was read from the review-comment
+endpoint (only the semantic-review gate opens tasks there). Its messages —
+``message``, ``close``, and the round-cap posts — reply on that review thread
+(``in_reply_to`` the task id); every other task stays on issue comments.
+
+Every comment a verb posts opens with a speaker heading naming the agent,
+its card's role, and the GitHub login read once per verb from ``gh api user``.
 
 Mutating verbs print one JSON object on stdout and one human line on stderr;
 a fatal outcome is one ``Error: <reason>`` line and exit ``1``; invalid
@@ -24,6 +37,7 @@ arguments exit ``2`` with usage text.
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -45,6 +59,7 @@ PLUGIN_MANIFEST = os.path.normpath(
 
 AGENT_ENV = "SHIPD_ROOM_AGENT"
 CLOSE_STATES = ("completed", "canceled", "failed")
+OPEN_STATES = ("working", "input-required")
 
 
 class RoomError(Exception):
@@ -81,16 +96,36 @@ def _gh_json(gh, args, input=None, what=None):
         raise RoomError("%s returned invalid JSON: %s" % (label, exc))
 
 
-def _resolve_room(gh, pr):
+_PR_URL = re.compile(r"^https?://[^/]+/([^/]+/[^/]+)/pull/(\d+)")
+
+
+def _resolve_room(gh, pr, repo=None):
     """``(repo, number, context)`` for ``pr``; the context id is
-    ``<owner>/<repo>#<number>``."""
-    pr_data = _gh_json(gh, ["pr", "view", str(pr), "--json", "number,url"],
-                       what="gh pr view %s" % pr)
-    repo_data = _gh_json(gh, ["repo", "view", "--json", "nameWithOwner"],
-                         what="gh repo view")
+    ``<owner>/<repo>#<number>``. The repository comes from a pull request
+    URL first, then ``repo`` (``--repo``), else ``gh repo view`` in the
+    working directory; a URL and ``repo`` naming different repositories
+    raise ``RoomError``."""
+    ref = str(pr)
+    match = _PR_URL.match(ref)
+    if match:
+        url_repo = match.group(1)
+        if repo and repo.lower() != url_repo.lower():
+            raise RoomError("pull request URL names %s but --repo names %s"
+                            % (url_repo, repo))
+        repo, ref = url_repo, match.group(2)
+    args = ["pr", "view", ref, "--json", "number,url"]
+    if repo:
+        args += ["--repo", repo]
+    pr_data = _gh_json(gh, args, what="gh pr view %s" % pr)
+    if not repo:
+        repo_data = _gh_json(gh, ["repo", "view", "--json", "nameWithOwner"],
+                             what="gh repo view")
+        try:
+            repo = repo_data["nameWithOwner"]
+        except (KeyError, TypeError):
+            raise RoomError("could not resolve the pull request for %s" % pr)
     try:
         number = int(pr_data["number"])
-        repo = repo_data["nameWithOwner"]
     except (KeyError, TypeError, ValueError):
         raise RoomError("could not resolve the pull request for %s" % pr)
     return repo, number, "%s#%d" % (repo, number)
@@ -177,13 +212,41 @@ def _room_from_comments(comments):
     return cards, tasks
 
 
-def _read_room(gh, repo, number):
-    """Read the room once: ``(cards, tasks, raw)``.
+SUMMARY_MARKERS = ("<!-- shipd-semantic-review -->",
+                   "<!-- am-semantic-review -->")
 
-    ``cards`` and ``tasks`` are as ``_room_from_comments`` builds them, and
-    ``raw`` maps a card name to the issue comment id holding it, for the join
-    upsert."""
-    return _parse_room(_read_comments(gh, repo, number))
+
+def _owned_card_ids(comments):
+    """Card name -> id of the last issue comment that holds only that agent's
+    card: exactly one room marker, an ``AgentCard``, and no semantic-review
+    summary marker. A comment whose marker does not parse is skipped."""
+    owned = {}
+    for comment in comments:
+        if _endpoint(comment) != "issue":
+            continue
+        body = comment.get("body") or ""
+        if any(marker in body for marker in SUMMARY_MARKERS):
+            continue
+        try:
+            parsed = room_schema.parse_comments(body)
+        except room_schema.SchemaError:
+            continue
+        if len(parsed) == 1 and isinstance(parsed[0], room_schema.AgentCard):
+            owned[parsed[0].name] = comment.get("id")
+    return owned
+
+
+def _read_room(gh, repo, number):
+    """Read the room once: ``(cards, tasks, raw, comments)``.
+
+    ``cards`` and ``tasks`` are as ``_room_from_comments`` builds them,
+    ``raw`` maps a card name to the last issue comment holding that card,
+    which may be a foreign comment such as the review summary; ``join`` does
+    not use it (see ``_owned_card_ids``). ``comments`` is the raw comment list
+    that was read."""
+    comments = _read_comments(gh, repo, number)
+    cards, tasks, raw = _parse_room(comments)
+    return cards, tasks, raw, comments
 
 
 def _last_comment(comments, task):
@@ -212,6 +275,25 @@ def _post(gh, repo, number, body):
         gh, ["api", "-X", "POST",
              "repos/%s/issues/%d/comments" % (repo, number), "--input", "-"],
         input=json.dumps({"body": body}), what="posting a room comment")
+
+
+def _finding_root(comments, task):
+    """``task.id`` when the comment whose id is ``task.id`` was read from the
+    review endpoint (a finding task's thread root), else ``None``."""
+    for comment in comments:
+        if comment.get("id") == task.id:
+            return task.id if _endpoint(comment) == "review" else None
+    return None
+
+
+def _post_reply(gh, repo, number, thread, body):
+    """Reply on the review thread rooted at comment ``thread``; the parsed
+    response (``id``, ``html_url``)."""
+    return _gh_json(
+        gh, ["api", "-X", "POST",
+             "repos/%s/pulls/%d/comments" % (repo, number), "--input", "-"],
+        input=json.dumps({"body": body, "in_reply_to": thread}),
+        what="posting a room reply on thread %s" % thread)
 
 
 def _patch(gh, repo, comment_id, body):
@@ -303,11 +385,168 @@ def _emit(obj):
     sys.stdout.write(json.dumps(obj) + "\n")
 
 
-def _post_message(gh, repo, number, message):
+def _delete(gh, repo, comment_id, endpoint="issue"):
+    """Delete an issue comment, or a review comment for ``"review"``."""
+    path = "pulls" if endpoint == "review" else "issues"
+    rc, _out, err = gh(["api", "-X", "DELETE",
+                        "repos/%s/%s/comments/%s" % (repo, path, comment_id)])
+    if rc != 0:
+        raise RoomError("deleting room comment %s failed: %s"
+                        % (comment_id, (err or "").strip() or "exit %d" % rc))
+
+
+def _own_claim(comments, task, agent):
+    """``(id, endpoint)`` of ``task``'s last comment when its Message for the
+    task was posted by ``agent`` at ``working`` (on either endpoint); else
+    ``None``."""
+    last = _last_comment(comments, task)
+    if last is None:
+        return None
     try:
-        body = room_schema.render_comment(message)
+        parsed = room_schema.parse_comments(
+            last.get("body") or "",
+            author=(last.get("user") or {}).get("login"))
+    except room_schema.SchemaError:
+        return None
+    for obj in parsed:
+        if (isinstance(obj, room_schema.Message)
+                and obj.task_id == task.id and obj.agent == agent
+                and obj.state == "working"):
+            return last.get("id"), _endpoint(last)
+    return None
+
+
+def _drop_claim(gh, repo, claim):
+    """Delete the claim comment (``(id, endpoint)`` from ``_own_claim``)
+    after the reply is posted; a failure is a warning, because the reply
+    stands."""
+    if claim is None:
+        return
+    claim_id, endpoint = claim
+    try:
+        _delete(gh, repo, claim_id, endpoint)
+    except RoomError:
+        sys.stderr.write("warning: could not remove claim comment %s\n"
+                         % claim_id)
+
+
+THREAD_LOOKUP_QUERY = """
+query($owner:String!, $name:String!, $number:Int!) {
+  repository(owner:$owner, name:$name) {
+    pullRequest(number:$number) {
+      reviewThreads(first:100) {
+        nodes { id isResolved comments(first:1) { nodes { databaseId } } }
+      }
+    }
+  }
+}
+"""
+
+
+def _resolve_finding_thread(gh, repo, number, task_id):
+    """Resolve the review thread rooted at finding task ``task_id`` with the
+    mutation ``review_gate.py resolve`` uses. A thread already resolved is
+    left alone; a missing thread or a failed call is one warning, because
+    the reply already stands."""
+    owner, _sep, name = repo.partition("/")
+    warning = ("warning: could not resolve the review thread for task %s\n"
+               % task_id)
+    rc, out, _err = gh(["api", "graphql", "-f", "query=%s" % THREAD_LOOKUP_QUERY,
+                        "-f", "owner=%s" % owner, "-f", "name=%s" % name,
+                        "-F", "number=%d" % number])
+    thread = None
+    if rc == 0:
+        try:
+            data = json.loads(out or "null")
+            nodes = (data["data"]["repository"]["pullRequest"]
+                     ["reviewThreads"]["nodes"])
+            for node in nodes:
+                first = (node.get("comments") or {}).get("nodes") or []
+                if first and first[0].get("databaseId") == task_id:
+                    thread = node
+                    break
+        except (ValueError, KeyError, TypeError, AttributeError):
+            thread = None
+    if thread is None:
+        sys.stderr.write(warning)
+        return
+    if thread.get("isResolved"):
+        return
+    rc, _out, _err = gh(["api", "graphql", "-f",
+                         "query=%s" % room_schema.RESOLVE_THREAD_MUTATION,
+                         "-f", "threadId=%s" % thread.get("id")])
+    if rc != 0:
+        sys.stderr.write(warning)
+
+
+def _login(gh, memo):
+    """The posting GitHub login from ``gh api user``, read once per verb and
+    kept in ``memo``. A failed read or an empty login warns once and yields
+    ``""``, so the heading drops its ``(for @login)`` segment."""
+    if "login" in memo:
+        return memo["login"]
+    login = ""
+    rc, out, err = gh(["api", "user"])
+    if rc == 0:
+        try:
+            data = json.loads(out or "null")
+            login = str(data.get("login") or "") \
+                if isinstance(data, dict) else ""
+        except ValueError:
+            login = ""
+    if not login:
+        sys.stderr.write(
+            "warning: could not read the GitHub login (gh api user%s); "
+            "posting without a '(for @login)' heading\n"
+            % (": %s" % (err or "").strip() if rc != 0 and (err or "").strip()
+               else ""))
+    memo["login"] = login
+    return login
+
+
+def _pr_author(gh, ref, repo):
+    """The pull request author's login from ``gh pr view --json author``, or
+    ``""`` when the read fails or names no login."""
+    rc, out, _err = gh(["pr", "view", str(ref), "--json", "author",
+                        "--repo", repo])
+    if rc != 0:
+        return ""
+    try:
+        data = json.loads(out or "null")
+        author = data.get("author") if isinstance(data, dict) else None
+        return str(author.get("login") or "") \
+            if isinstance(author, dict) else ""
+    except ValueError:
+        return ""
+
+
+def _credential_source(environ):
+    """Which credential the ``gh`` subprocess will use: ``GH_TOKEN``, else
+    ``GH_CONFIG_DIR``, else the shared ``gh`` login. Names only, never a
+    value."""
+    if environ.get("GH_TOKEN"):
+        return "GH_TOKEN"
+    if environ.get("GH_CONFIG_DIR"):
+        return "GH_CONFIG_DIR"
+    return "gh-login"
+
+
+def _card_role(cards, name):
+    """The role on ``name``'s card, or ``""`` when it has none."""
+    for card in cards:
+        if card.name == name:
+            return card.role
+    return ""
+
+
+def _post_message(gh, repo, number, message, login="", role="",
+                  thread=None):
+    try:
+        body = room_schema.render_comment(message, login=login, role=role)
     except room_schema.SchemaError as exc:
         raise RoomError(str(exc))
+    if thread is not None:
+        return _post_reply(gh, repo, number, thread, body)
     return _post(gh, repo, number, body)
 
 
@@ -343,22 +582,30 @@ def actionable_tasks(tasks, agent, skills=()):
 def cmd_join(opts, parser, gh):
     root = _root(opts)
     agent = _agent_name(opts, parser, root)
-    repo, number, context = _resolve_room(gh, opts.pr)
-    _cards, _tasks, raw = _read_room(gh, repo, number)
+    repo, number, context = _resolve_room(gh, opts.pr, opts.repo)
+    _cards, _tasks, _raw, comments = _read_room(gh, repo, number)
+    owned = _owned_card_ids(comments)
     card = room_schema.AgentCard(
         name=agent, description=opts.description or "",
         skills=tuple(opts.skill or ()), version=_plugin_version(),
-        harness=opts.harness or "")
+        harness=opts.harness or "", role=opts.role or "")
     try:
         body = room_schema.render_comment(card)
     except room_schema.SchemaError as exc:
         raise RoomError(str(exc))
-    if agent in raw:
-        resp = _patch(gh, repo, raw[agent], body)
+    if agent in owned:
+        resp = _patch(gh, repo, owned[agent], body)
     else:
         resp = _post(gh, repo, number, body)
     resp = resp or {}
-    _emit({"comment": resp.get("id", raw.get(agent)), "agent": agent,
+    if opts.role in ("reviewer", "ci"):
+        login = _login(gh, {})
+        author = _pr_author(gh, number, repo) if login else ""
+        if login and author and login.lower() == author.lower():
+            sys.stderr.write(
+                "warning: acting as @%s, who authored this pull request; "
+                "a %s cannot approve it\n" % (login, opts.role))
+    _emit({"comment": resp.get("id", owned.get(agent)), "agent": agent,
            "url": resp.get("html_url")})
     sys.stderr.write("joined %s as %s\n" % (context, agent))
     return 0
@@ -374,9 +621,14 @@ def _task_line(task):
 
 
 def _card_line(card):
-    return "%s  harness %s  skills %s  version %s" % (
-        card.name, card.harness or "-",
-        ",".join(card.skills) if card.skills else "-", card.version or "-")
+    parts = [card.name]
+    if card.role:
+        parts.append("role %s" % card.role)
+    if card.harness:
+        parts.append("harness %s" % card.harness)
+    parts.append("skills %s" % (",".join(card.skills) if card.skills else "-"))
+    parts.append("version %s" % (card.version or "-"))
+    return "  ".join(parts)
 
 
 def _task_dict(task):
@@ -395,8 +647,10 @@ def _task_dict(task):
 
 def cmd_list(opts, parser, gh):
     _agent_name(opts, parser, _root(opts))
-    repo, number, context = _resolve_room(gh, opts.pr)
-    cards, tasks, _raw = _read_room(gh, repo, number)
+    repo, number, context = _resolve_room(gh, opts.pr, opts.repo)
+    cards, tasks, _raw, _comments = _read_room(gh, repo, number)
+    if opts.open:
+        tasks = [t for t in tasks if t.state in OPEN_STATES]
     if opts.json:
         _emit({"context": context,
                "cards": [room_schema.card_to_dict(c) for c in cards],
@@ -410,6 +664,25 @@ def cmd_list(opts, parser, gh):
     return 0
 
 
+def cmd_whoami(opts, parser, gh):
+    repo, number, _context = _resolve_room(gh, opts.pr, opts.repo)
+    login = _login(gh, {})
+    author = _pr_author(gh, number, repo)
+    if not login:
+        raise RoomError("could not read the acting GitHub login (gh api "
+                        "user failed); an approval needs a readable account")
+    if not author:
+        raise RoomError("could not read the author of %s#%d; an approval "
+                        "needs a known author" % (repo, number))
+    if login.lower() == author.lower():
+        raise RoomError("acting as @%s, who authored %s#%d; an author "
+                        "cannot approve their own pull request"
+                        % (login, repo, number))
+    _emit({"login": login, "author": author,
+           "source": _credential_source(os.environ), "may_approve": True})
+    return 0
+
+
 def _reply_result(resp, task_id, state, rnd):
     resp = resp or {}
     return {"comment": resp.get("id"), "task": task_id, "state": state,
@@ -419,9 +692,11 @@ def _reply_result(resp, task_id, state, rnd):
 def cmd_message(opts, parser, gh):
     root = _root(opts)
     agent = _agent_name(opts, parser, root)
-    repo, number, context = _resolve_room(gh, opts.pr)
-    cards, tasks, _raw = _read_room(gh, repo, number)
+    repo, number, context = _resolve_room(gh, opts.pr, opts.repo)
+    cards, tasks, _raw, comments = _read_room(gh, repo, number)
     _require_card(cards, agent, context)
+    memo = {}
+    role = _card_role(cards, agent)
     metadata = {}
     if opts.new:
         requested = opts.state or (
@@ -431,6 +706,8 @@ def cmd_message(opts, parser, gh):
         if opts.skill:
             metadata["skill"] = opts.skill
         task_id = None
+        claim_id = None
+        thread = None
     else:
         task = _find_task(tasks, opts.task, context)
         requested = opts.state or ("input-required" if opts.to else "working")
@@ -442,16 +719,24 @@ def cmd_message(opts, parser, gh):
                 context, agent, "round cap (%d) reached" % max_rounds,
                 task.id, {"state": "failed", "reason": "round-cap",
                           "round": rnd})
-            _post_message(gh, repo, number, capped)
+            _post_message(gh, repo, number, capped, _login(gh, memo),
+                          role, thread=_finding_root(comments, task))
             raise RoomError("round cap reached on task %s — posted failed "
                             "(round-cap)" % task.id)
         task_id = task.id
+        thread = _finding_root(comments, task)
+        claim_id = (_own_claim(comments, task, agent)
+                    if state != "working" else None)
     metadata.update({"state": state, "round": rnd})
     if opts.to:
         metadata["to"] = opts.to
     resp = _post_message(gh, repo, number,
                          _message(context, agent, opts.text, task_id,
-                                  metadata))
+                                  metadata), _login(gh, memo), role,
+                         thread=thread)
+    _drop_claim(gh, repo, claim_id)
+    if state == "completed" and thread is not None:
+        _resolve_finding_thread(gh, repo, number, thread)
     opened = task_id if task_id is not None else (resp or {}).get("id")
     _emit(_reply_result(resp, opened, state, rnd))
     sys.stderr.write("posted %s on task %s in %s\n" % (state, opened, context))
@@ -461,13 +746,14 @@ def cmd_message(opts, parser, gh):
 def cmd_close(opts, parser, gh):
     root = _root(opts)
     agent = _agent_name(opts, parser, root)
-    repo, number, context = _resolve_room(gh, opts.pr)
-    cards, tasks, _raw = _read_room(gh, repo, number)
+    repo, number, context = _resolve_room(gh, opts.pr, opts.repo)
+    cards, tasks, _raw, comments = _read_room(gh, repo, number)
     _require_card(cards, agent, context)
     task = _find_task(tasks, opts.task, context)
     requested = opts.state or "completed"
     state = _transition(task.id, task.state, requested)
     rnd = room_schema.next_round(task, agent)
+    claim_id = _own_claim(comments, task, agent)
     metadata = {"state": state, "round": rnd}
     if opts.reason:
         metadata["reason"] = opts.reason
@@ -477,7 +763,13 @@ def cmd_close(opts, parser, gh):
         if opts.reason:
             text += " — %s" % opts.reason
     resp = _post_message(gh, repo, number,
-                         _message(context, agent, text, task.id, metadata))
+                         _message(context, agent, text, task.id, metadata),
+                         _login(gh, {}), _card_role(cards, agent),
+                         thread=_finding_root(comments, task))
+    _drop_claim(gh, repo, claim_id)
+    thread = _finding_root(comments, task)
+    if state == "completed" and thread is not None:
+        _resolve_finding_thread(gh, repo, number, thread)
     _emit(_reply_result(resp, task.id, state, rnd))
     sys.stderr.write("closed task %s as %s in %s\n" % (task.id, state,
                                                        context))
@@ -527,7 +819,7 @@ def _watch_line(task, comment, context, cursor):
 
 
 def _cap_task(gh, repo, number, context, agent, card, task, max_rounds,
-              warned):
+              warned, memo, comments=()):
     """Close a task at the round cap: post ``failed``/``round-cap`` on it
     when ``agent`` has a card, else warn that someone must join to close
     it — once per task per watch, tracked in the ``warned`` id set. Either
@@ -542,9 +834,20 @@ def _cap_task(gh, repo, number, context, agent, card, task, max_rounds,
         context, agent, "round cap (%d) reached" % max_rounds, task.id,
         {"state": "failed", "reason": "round-cap",
          "round": room_schema.next_round(task, agent)})
-    _post_message(gh, repo, number, capped)
+    _post_message(gh, repo, number, capped, _login(gh, memo), card.role,
+                  thread=_finding_root(comments, task))
     sys.stderr.write("task %s: round cap reached — posted failed "
                      "(round-cap)\n" % task.id)
+
+
+def _pr_closed(gh, repo, number):
+    """``"merged"`` or ``"closed"`` when the pull request has ended, else
+    ``None``."""
+    data = _gh_json(gh, ["pr", "view", str(number), "--json", "state",
+                     "--repo", repo],
+                    what="gh pr view %s" % number)
+    state = (data or {}).get("state") if isinstance(data, dict) else None
+    return {"MERGED": "merged", "CLOSED": "closed"}.get(state)
 
 
 def cmd_watch(opts, gh, sleep, clock, parser):
@@ -554,9 +857,10 @@ def cmd_watch(opts, gh, sleep, clock, parser):
     root = _root(opts)
     agent = _agent_name(opts, parser, root)
     max_rounds = _max_rounds(opts, root)
-    repo, number, context = _resolve_room(gh, opts.pr)
+    repo, number, context = _resolve_room(gh, opts.pr, opts.repo)
     cursor = opts.since
     warned = set()
+    memo = {}
     start = clock()
     while True:
         comments = _read_comments(gh, repo, number)
@@ -567,16 +871,32 @@ def cmd_watch(opts, gh, sleep, clock, parser):
         for task in actionable_tasks(tasks, agent, skills):
             if room_schema.at_round_cap(task, agent, max_rounds):
                 _cap_task(gh, repo, number, context, agent, card, task,
-                          max_rounds, warned)
+                          max_rounds, warned, memo, comments)
                 continue
             comment = _last_comment(comments, task)
             if comment is not None and _is_new(comment, cursor):
                 surfaced.append((task, comment))
         cursor = _advance(cursor, comments)
+        ended = _pr_closed(gh, repo, number)
+        for task, comment in surfaced:
+            sys.stdout.write(
+                _watch_line(task, comment, context, cursor) + "\n")
+        if ended:
+            unresolved = [t for t in tasks if t.state in OPEN_STATES]
+            sys.stdout.write(json.dumps(
+                {"closed": ended, "context": context,
+                 "cursor": _cursor_text(cursor),
+                 "open": [{"task": t.id, "state": t.state, "to": t.to,
+                           "skill": t.skill} for t in unresolved]}) + "\n")
+            sys.stdout.flush()
+            if unresolved:
+                sys.stderr.write("watch: %d unresolved task(s): %s\n" % (
+                    len(unresolved), ", ".join(
+                        "#%s %s" % (t.id, t.state) for t in unresolved)))
+            sys.stderr.write("watch: %s is %s; the room is closed\n"
+                             % (context, ended))
+            return 0
         if surfaced:
-            for task, comment in surfaced:
-                sys.stdout.write(
-                    _watch_line(task, comment, context, cursor) + "\n")
             sys.stdout.flush()
             return 0
         if opts.once:
@@ -602,6 +922,17 @@ def _positive_int(value):
     if number < 1:
         raise argparse.ArgumentTypeError("must be at least 1, got %d"
                                          % number)
+    return number
+
+
+def _positive_float(value):
+    try:
+        number = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be a number, got %r" % value)
+    if not number > 0:
+        raise argparse.ArgumentTypeError(
+            "must be greater than 0, got %s" % value)
     return number
 
 
@@ -633,6 +964,9 @@ def build_parser():
         "--root", help="the directory whose layered config is read "
                        "(default: the working directory)")
     common.add_argument(
+        "--repo", help="the repository as owner/name (default: the pull "
+                       "request URL's, else the working directory's)")
+    common.add_argument(
         "--max-rounds", type=_positive_int, dest="max_rounds",
         help="the turn cap per task (default: room.max_rounds, else 6)")
 
@@ -651,6 +985,9 @@ def build_parser():
                    help="a line describing this agent")
     p.add_argument("--harness", default="",
                    help="the harness driving this agent")
+    p.add_argument("--role", default="", choices=("",) + room_schema.ROLE_VALUES,
+                   help="the agent's role: %s" % ", ".join(
+                       room_schema.ROLE_VALUES))
     p.set_defaults(func=cmd_join)
 
     p = sub.add_parser("list", parents=[common],
@@ -658,7 +995,15 @@ def build_parser():
     p.add_argument("pr", help="pull request number, URL, or branch")
     p.add_argument("--json", action="store_true",
                    help="emit one JSON object instead of text")
+    p.add_argument("--open", action="store_true",
+                   help="list only tasks still working or input-required")
     p.set_defaults(func=cmd_list)
+
+    p = sub.add_parser("whoami", parents=[common],
+                       help="the acting account, refused when it authored "
+                            "the pull request")
+    p.add_argument("pr", help="pull request number, URL, or branch")
+    p.set_defaults(func=cmd_whoami)
 
     p = sub.add_parser("message", parents=[common],
                        help="open a task or advance one")
@@ -707,16 +1052,59 @@ def build_parser():
                    help="poll once and stop")
     p.set_defaults(func=None)
 
+    p = sub.add_parser("run", parents=[common],
+                       help="join once, then answer each task with a "
+                            "headless /s:room turn")
+    p.add_argument("pr", help="pull request number, URL, or branch")
+    p.add_argument("--role", required=True, choices=room_schema.ROLE_VALUES,
+                   help="the agent's role: %s" % ", ".join(
+                       room_schema.ROLE_VALUES))
+    p.add_argument("--skill", action="append", default=[],
+                   help="a skill id this agent handles (repeatable; default: "
+                        "review-finding, question, status)")
+    p.add_argument("--description", default="",
+                   help="a line describing this agent")
+    p.add_argument("--harness", default=None,
+                   help="the harness that runs each turn (default: claude)")
+    p.add_argument("--model", default=None,
+                   help="a model id or effort level for each turn "
+                        "(default: the harness's own)")
+    p.add_argument("--max-turns", type=_positive_int, default=10,
+                   dest="max_turns", metavar="N",
+                   help="stop after this many turns (default: 10)")
+    p.add_argument("--budget", type=_positive_float, default=14400.0,
+                   metavar="S",
+                   help="stop after this many seconds (default: 14400)")
+    p.add_argument("--turn-timeout", type=_positive_float,
+                   default=None, dest="turn_timeout", metavar="S",
+                   help="seconds one turn may run (default: 1800)")
+    p.add_argument("--interval", type=float, default=30.0, metavar="S",
+                   help="seconds between polls (default: 30)")
+    p.add_argument("--since", type=_cursor, default=(0, 0),
+                   metavar="CURSOR",
+                   help="surface only tasks newer than <issue>:<review> "
+                        "comment ids (default: 0:0, the backlog)")
+    p.add_argument("--request-review", action="append", default=[],
+                   dest="request_review", metavar="AGENT",
+                   help="open a review-finding task addressed to AGENT "
+                        "after joining (repeatable; needs --role author)")
+    p.set_defaults(func=None)
+
     return parser, sub.choices
 
 
-def main(argv=None, gh=None, sleep=time.sleep, clock=time.monotonic):
+def main(argv=None, gh=None, sleep=time.sleep, clock=time.monotonic,
+         runner=None, preflight=None):
     parser, verbs = build_parser()
     opts = parser.parse_args(argv)
     gh = gh or _default_gh
     try:
         if opts.verb == "watch":
             return cmd_watch(opts, gh, sleep, clock, verbs["watch"])
+        if opts.verb == "run":
+            import room_run
+            return room_run.cmd_run(opts, verbs["run"], gh, runner,
+                                    sleep, clock, preflight=preflight)
         return opts.func(opts, verbs[opts.verb], gh)
     except RoomError as exc:
         cli_common.err(str(exc))

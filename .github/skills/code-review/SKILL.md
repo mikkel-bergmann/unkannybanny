@@ -8,7 +8,7 @@ description: >-
   ship-it/fix-required verdict. Use for every code review of this repository.
 ---
 
-<!-- shipd-copilot v0.6.320 -->
+<!-- shipd-copilot v0.6.331 -->
 
 # shipd semantic code review
 
@@ -35,6 +35,11 @@ Subcommands used in a review:
 
 Compare the pull request's base against its head — `diff <base> <head>` — which
 uses merge-base (three-dot) semantics, matching what GitHub shows.
+
+When the invoking prompt names files holding the engine's `files` and `diff`
+output, read those as your map and your structural diff (steps 1 and 2 below);
+do not run those subcommands yourself. The gate computes that output with
+the base first and the head second, and fails closed when it covers no files.
 
 ## Workflow
 
