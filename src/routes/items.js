@@ -53,15 +53,6 @@ export default function itemsRouter(store) {
 
   router.post("/items/:id/move", requireJson, express.json(), wrap(async (req, res) => {
     const input = validateItemMove(req.body);
-    await requireColumn(store, input.columnId);
-    if (input.before !== null) {
-      const target = await store.get(input.before);
-      if (!target) throw new ItemValidationError(`before names no item: ${input.before}`);
-      if (input.before === req.params.id) throw new ItemValidationError("before must not be the moved item");
-      if (target.columnId !== input.columnId) {
-        throw new ItemValidationError("before names an item in another column");
-      }
-    }
     const item = await store.moveItem(req.params.id, input);
     if (!item) return notFound(res, req.params.id);
     res.json(item);
