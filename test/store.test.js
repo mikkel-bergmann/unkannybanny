@@ -271,3 +271,64 @@ test("create and update refuse a column that no longer exists", async () => {
   assert.equal((await store.list()).length, 1);
   assert.equal((await store.update(item.id, { title: "b" })).title, "b");
 });
+
+test("moveItem places an item before another within a lane", async () => {
+  const store = createStore({ path: path.join(await tmpDir(), "banny.json") });
+  const k = await store.createColumn({ name: "k" });
+  const a = await store.create({ ...sample, title: "a", columnId: k.id });
+  const b = await store.create({ ...sample, title: "b", columnId: k.id });
+  const c = await store.create({ ...sample, title: "c", columnId: k.id });
+  const moved = await store.moveItem(c.id, { columnId: k.id, before: a.id });
+  assert.equal(moved.id, c.id);
+  assert.deepEqual((await store.list()).map((i) => i.id), [c.id, a.id, b.id]);
+});
+
+test("moveItem places an item before a later item in the lane", async () => {
+  const store = createStore({ path: path.join(await tmpDir(), "banny.json") });
+  const a = await store.create({ ...sample, title: "a" });
+  const b = await store.create({ ...sample, title: "b" });
+  const c = await store.create({ ...sample, title: "c" });
+  await store.moveItem(a.id, { columnId: null, before: c.id });
+  assert.deepEqual((await store.list()).map((i) => i.id), [b.id, a.id, c.id]);
+  await store.moveItem(b.id, { columnId: null, before: c.id });
+  assert.deepEqual((await store.list()).map((i) => i.id), [a.id, b.id, c.id]);
+});
+
+test("moveItem moves across lanes to a position", async () => {
+  const store = createStore({ path: path.join(await tmpDir(), "banny.json") });
+  const k = await store.createColumn({ name: "k" });
+  const m = await store.createColumn({ name: "m" });
+  const a = await store.create({ ...sample, title: "a", columnId: k.id });
+  const b = await store.create({ ...sample, title: "b", columnId: k.id });
+  const x = await store.create({ ...sample, title: "x", columnId: m.id });
+  const moved = await store.moveItem(x.id, { columnId: k.id, before: b.id });
+  assert.equal(moved.columnId, k.id);
+  assert.deepEqual((await store.list()).map((i) => i.id), [a.id, x.id, b.id]);
+});
+
+test("moveItem with before null moves to the end", async () => {
+  const store = createStore({ path: path.join(await tmpDir(), "banny.json") });
+  const a = await store.create({ ...sample, title: "a" });
+  const b = await store.create({ ...sample, title: "b" });
+  await store.moveItem(a.id, { columnId: null, before: null });
+  assert.deepEqual((await store.list()).map((i) => i.id), [b.id, a.id]);
+});
+
+test("moveItem on an unknown id resolves null and leaves the file alone", async () => {
+  const file = path.join(await tmpDir(), "banny.json");
+  const store = createStore({ path: file });
+  await store.create(sample);
+  const text = await fs.readFile(file, "utf8");
+  assert.equal(await store.moveItem("no-such-id", { columnId: null, before: null }), null);
+  assert.equal(await fs.readFile(file, "utf8"), text);
+});
+
+test("an existing file keeps its order and is not rewritten", async () => {
+  const file = path.join(await tmpDir(), "banny.json");
+  const mk = (id) => ({ id, title: id, done: false, tags: [], columnId: null, createdAt: "t", updatedAt: "t" });
+  const text = JSON.stringify({ items: [mk("a"), mk("b"), mk("c")] });
+  await fs.writeFile(file, text);
+  const store = createStore({ path: file });
+  assert.deepEqual((await store.list()).map((i) => i.id), ["a", "b", "c"]);
+  assert.equal(await fs.readFile(file, "utf8"), text);
+});
