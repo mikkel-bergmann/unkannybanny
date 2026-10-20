@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import crypto from "node:crypto";
 import nodePath from "node:path";
+import { ItemValidationError } from "./items.js";
 
 export function createStore({ path } = {}) {
   const file = nodePath.resolve(path ?? process.env.BANNY_DATA ?? "data/banny.json");
@@ -78,6 +79,12 @@ export function createStore({ path } = {}) {
     }
   }
 
+  function checkColumn(columnId) {
+    if (columnId != null && !columns.some((c) => c.id === columnId)) {
+      throw new ItemValidationError(`columnId names no column: ${columnId}`);
+    }
+  }
+
   return {
     path: file,
     list: () => run(() => structuredClone(items)),
@@ -88,6 +95,7 @@ export function createStore({ path } = {}) {
       }),
     create: ({ title, done, tags, columnId } = {}) =>
       run(async () => {
+        checkColumn(columnId);
         const now = new Date().toISOString();
         const item = {
           id: crypto.randomUUID(),
@@ -105,6 +113,7 @@ export function createStore({ path } = {}) {
       run(async () => {
         const index = items.findIndex((i) => i.id === id);
         if (index === -1) return null;
+        if ("columnId" in patch) checkColumn(patch.columnId);
         const next = { ...items[index] };
         for (const key of ["title", "done", "tags", "columnId"]) {
           if (key in patch) next[key] = patch[key];

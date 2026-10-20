@@ -254,3 +254,20 @@ test("a board with no columns writes the original items-only shape", async () =>
   const parsed = JSON.parse(await fs.readFile(file, "utf8"));
   assert.deepEqual(Object.keys(parsed), ["items"]);
 });
+
+test("create and update refuse a column that no longer exists", async () => {
+  const dir = await tmpDir();
+  const store = createStore({ path: path.join(dir, "banny.json") });
+  const column = await store.createColumn({ name: "todo" });
+  const item = await store.create({ ...sample, columnId: column.id });
+  await store.removeColumn(column.id);
+  await assert.rejects(store.create({ ...sample, columnId: column.id }), {
+    name: "ItemValidationError",
+    message: `columnId names no column: ${column.id}`,
+  });
+  await assert.rejects(store.update(item.id, { columnId: column.id }), {
+    name: "ItemValidationError",
+  });
+  assert.equal((await store.list()).length, 1);
+  assert.equal((await store.update(item.id, { title: "b" })).title, "b");
+});
