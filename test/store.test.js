@@ -319,3 +319,12 @@ test("an existing file keeps its array order as card order", async () => {
   assert.deepEqual((await store.list()).map((i) => i.id), ["a", "b", "c"]);
   assert.equal(await fs.readFile(file, "utf8"), text);
 });
+
+test("moveItem places a downward move before its target", async () => {
+  const store = createStore({ path: path.join(await tmpDir(), "banny.json") });
+  const lane = await store.createColumn({ name: "K" });
+  const made = [];
+  for (const title of ["a", "b", "c"]) made.push(await store.create({ title, done: false, tags: [], columnId: lane.id }));
+  await store.moveItem(made[0].id, { columnId: lane.id, before: made[2].id });
+  assert.deepEqual((await store.list()).map((i) => i.title), ["b", "a", "c"]);
+});
