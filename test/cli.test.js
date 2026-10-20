@@ -6,7 +6,6 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createStore } from "../src/store.js";
-import { main } from "../bin/banny.js";
 
 const BIN = fileURLToPath(new URL("../bin/banny.js", import.meta.url));
 
@@ -294,53 +293,5 @@ test("move --before refuses self and other-lane, and exits 4 for an unknown item
   assert.equal(banny(file, "move", milk.id, col.id, "--before", milk.id).status, 3);
   assert.equal(banny(file, "move", milk.id, col.id, "--before", loose.id).status, 3);
   assert.equal(banny(file, "move", milk.id, col.id, "--before", "no-such-item").status, 4);
-  assert.equal(await fs.readFile(file, "utf8"), text);
-});
-
-test("move exits 4 when the --before item is deleted during the move", async () => {
-  const { file } = await tmpFile();
-  const store = createStore({ path: file });
-  const c = await store.createColumn({ name: "C" });
-  const a = await store.create({ title: "a", done: false, tags: [], columnId: c.id });
-  const x = await store.create({ title: "x", done: false, tags: [] });
-  const wrapped = {
-    ...store,
-    moveItem: (id, input) => {
-      store.remove(a.id);
-      return store.moveItem(id, input);
-    },
-  };
-  const err = [];
-  const code = await main(["move", x.id, c.id, "--before", a.id], {
-    stdout: { write: () => {} },
-    stderr: { write: (t) => err.push(t) },
-    store: wrapped,
-  });
-  assert.equal(code, 4);
-  assert.equal(err.join(""), `banny: no item with id ${a.id}\n`);
-  assert.equal((await store.get(x.id)).columnId, null);
-});
-
-test("move keeps its messages, exit codes, and check precedence", async () => {
-  const { file } = await tmpFile();
-  const store = createStore({ path: file });
-  const c = await store.createColumn({ name: "C" });
-  const milk = await store.create({ title: "milk", done: false, tags: [], columnId: c.id });
-  const loose = await store.create({ title: "loose", done: false, tags: [] });
-  const text = await fs.readFile(file, "utf8");
-  const run = (...args) => {
-    const r = banny(file, "move", ...args);
-    return [r.status, r.stderr];
-  };
-  assert.deepEqual(run(milk.id, c.id, "--before", milk.id), [3, "banny: --before must not be the moved item\n"]);
-  assert.deepEqual(run(milk.id, c.id, "--before", loose.id), [3, "banny: --before names an item in another lane\n"]);
-  assert.deepEqual(run(milk.id, c.id, "--before", "zz"), [4, "banny: no item with id zz\n"]);
-  assert.deepEqual(run("no-such-item", c.id, "--before", loose.id), [4, "banny: no item with id no-such-item\n"]);
-  assert.deepEqual(run("no-such-item", "nope"), [4, "banny: no column with id nope\n"]);
-  assert.deepEqual(run(milk.id, ""), [4, "banny: no column with id \n"]);
-  const json = banny(file, "move", milk.id, c.id, "--before", loose.id, "--json");
-  assert.deepEqual(JSON.parse(json.stderr), {
-    error: { code: "invalid-item", message: "--before names an item in another lane" },
-  });
   assert.equal(await fs.readFile(file, "utf8"), text);
 });

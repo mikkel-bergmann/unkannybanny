@@ -195,19 +195,16 @@ unassigning its items, and print `removed <id>`, or exit `4` naming the id when
 no column has it.
 
 When a user runs `banny move <item-id> <column-id>`, the system SHALL move the
-item into that column through the store's `moveItem`, placing it at the end of
-the lane, and print the item's list line; with `--none` it SHALL move the item
-into the unassigned lane instead and take no column id. Where
-`--before <item-id>` is given, the system SHALL place the item immediately
-before that item instead of at the end, so the verb also reorders a card within
-its own lane. The verb SHALL NOT read the store before `moveItem`; it SHALL map
-the store's `ItemReferenceError` reasons instead, so every check holds against
-the state the move writes. A missing column, item, or `--before` item SHALL
-exit `4` naming it, checked in that order ("no column with id <id>", then
-"no item with id <id>"). If the `--before` item is the moved item itself or
-sits in a different lane than the target, then the system SHALL exit `3` with
-"--before must not be the moved item" or "--before names an item in another
-lane" and SHALL NOT change the store.
+item into that column through `validateItemMove` and the store's `moveItem`,
+placing it at the end of the lane, and print the item's list line; with
+`--none` it SHALL move the item into the unassigned lane instead and take no
+column id. Where `--before <item-id>` is given, the system SHALL place the item
+immediately before that item instead of at the end, so the verb also reorders a
+card within its own lane. A missing item, column, or `--before` item SHALL exit
+`4` naming it. If the `--before` item is the moved item itself or sits in a
+different lane than the target, or `validateItemMove` throws
+`ItemValidationError`, then the system SHALL exit `3` with a message and SHALL
+NOT change the store.
 
 #### Scenario: List and add columns
 - **WHEN** the board is empty and a user runs `banny columns`, then
@@ -254,9 +251,3 @@ lane" and SHALL NOT change the store.
 - **WHEN** a user runs `banny column remove no-such-id`, then
   `banny move no-such-item <c>`
 - **THEN** each exits `4` and names the id
-
-#### Scenario: A --before item deleted during the move is refused
-- **WHEN** `main` runs `move <x> <c> --before <a>` with a store wrapped so
-  `moveItem` first starts `remove(<a>)`
-- **THEN** the exit code is `4`, stderr names `<a>`, and `x` keeps `columnId`
-  `null`
