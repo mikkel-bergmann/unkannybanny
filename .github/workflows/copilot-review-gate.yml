@@ -1,4 +1,4 @@
-# shipd-copilot v0.6.331
+# shipd-copilot v0.6.333
 #
 # Turns a semantic code review of a pull request into the `semantic-review`
 # commit status, so a branch protection requiring that context is satisfied by
@@ -159,8 +159,10 @@ permissions:
 # One live gate per pull request. A push while a review is running supersedes
 # it — the new head's own run owns the gate from then on — and cancelling the
 # old run is what stops two runs posting over each other.
+# A review by anyone other than Copilot runs in its own group, because its run
+# skips its job and must not cancel a live review.
 concurrency:
-  group: shipd-semantic-review-gate-${{ github.event.pull_request.number }}
+  group: shipd-semantic-review-gate-${{ github.event.pull_request.number }}${{ github.event_name == 'pull_request_review' && github.event.review.user.login != 'copilot-pull-request-reviewer[bot]' && format('-review-{0}', github.event.review.id) || '' }}
   cancel-in-progress: true
 
 jobs:
