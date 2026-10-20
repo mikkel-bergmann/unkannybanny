@@ -1,4 +1,4 @@
-# shipd-copilot v0.6.331
+# shipd-copilot v0.6.333
 #
 # Wakes this repository's CI agent when a shipd PR-room task is addressed to
 # it, runs the Copilot CLI on the task, and posts the reply back to the room.
