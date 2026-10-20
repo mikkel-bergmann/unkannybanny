@@ -131,7 +131,7 @@ export function createStore({ path } = {}) {
         checkColumn(columnId);
         const next = { ...items[index], columnId: columnId ?? null, updatedAt: new Date().toISOString() };
         const rest = items.filter((i) => i.id !== id);
-        const at = before == null ? -1 : items.findIndex((i) => i.id === before);
+        const at = before == null ? -1 : rest.findIndex((i) => i.id === before);
         if (at === -1) rest.push(next);
         else rest.splice(at, 0, next);
         await commit(rest);
