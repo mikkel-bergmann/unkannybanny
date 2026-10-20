@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import crypto from "node:crypto";
 import nodePath from "node:path";
-import { ItemReferenceError } from "./items.js";
+import { ItemValidationError } from "./items.js";
 
 export function createStore({ path } = {}) {
   const file = nodePath.resolve(path ?? process.env.BANNY_DATA ?? "data/banny.json");
@@ -81,7 +81,7 @@ export function createStore({ path } = {}) {
 
   function checkColumn(columnId) {
     if (columnId != null && !columns.some((c) => c.id === columnId)) {
-      throw new ItemReferenceError("column", columnId, "columnId names no column: " + columnId);
+      throw new ItemValidationError(`columnId names no column: ${columnId}`);
     }
   }
 
@@ -111,9 +111,9 @@ export function createStore({ path } = {}) {
       }),
     update: (id, patch = {}) =>
       run(async () => {
-        if ("columnId" in patch) checkColumn(patch.columnId);
         const index = items.findIndex((i) => i.id === id);
         if (index === -1) return null;
+        if ("columnId" in patch) checkColumn(patch.columnId);
         const next = { ...items[index] };
         for (const key of ["title", "done", "tags", "columnId"]) {
           if (key in patch) next[key] = patch[key];
@@ -122,31 +122,6 @@ export function createStore({ path } = {}) {
         const copy = [...items];
         copy[index] = next;
         await commit(copy);
-        return structuredClone(next);
-      }),
-    moveItem: (id, { columnId, before } = {}) =>
-      run(async () => {
-        const index = items.findIndex((i) => i.id === id);
-        if (index === -1) return null;
-        checkColumn(columnId);
-        if (before != null) {
-          const target = items.find((i) => i.id === before);
-          if (!target) {
-            throw new ItemReferenceError("before-missing", before, "before names no item: " + before);
-          }
-          if (before === id) {
-            throw new ItemReferenceError("before-self", before, "before must not be the moved item");
-          }
-          if (target.columnId !== columnId) {
-            throw new ItemReferenceError("before-lane", before, "before must be in the target column");
-          }
-        }
-        const next = { ...items[index], columnId, updatedAt: new Date().toISOString() };
-        const rest = items.filter((i) => i.id !== id);
-        const at = before == null ? -1 : rest.findIndex((i) => i.id === before);
-        if (at === -1) rest.push(next);
-        else rest.splice(at, 0, next);
-        await commit(rest);
         return structuredClone(next);
       }),
     remove: (id) =>
