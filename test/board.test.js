@@ -91,10 +91,6 @@ test("the inline script names the drag contract", async () => {
   const body = await (await fetch(`${base}/`)).text();
   const src = body.match(/<script>([\s\S]*?)<\/script>/)[1];
   for (const needle of ["/move", "application/x-banny-item", "application/x-banny-column", "lane-grip"]) {
-    assert.ok(src.includes(needle) || body.includes(needle), needle);
+    assert.ok(src.includes(needle), needle);
   }
-  assert.ok(src.includes("/move"));
-  assert.ok(src.includes("application/x-banny-item"));
-  assert.ok(src.includes("application/x-banny-column"));
-  assert.ok(src.includes("lane-grip"));
 });
