@@ -283,6 +283,17 @@ test("moveItem places an item before another within a lane", async () => {
   assert.deepEqual((await store.list()).map((i) => i.id), [c.id, a.id, b.id]);
 });
 
+test("moveItem places an item before a later item in the lane", async () => {
+  const store = createStore({ path: path.join(await tmpDir(), "banny.json") });
+  const a = await store.create({ ...sample, title: "a" });
+  const b = await store.create({ ...sample, title: "b" });
+  const c = await store.create({ ...sample, title: "c" });
+  await store.moveItem(a.id, { columnId: null, before: c.id });
+  assert.deepEqual((await store.list()).map((i) => i.id), [b.id, a.id, c.id]);
+  await store.moveItem(b.id, { columnId: null, before: c.id });
+  assert.deepEqual((await store.list()).map((i) => i.id), [a.id, b.id, c.id]);
+});
+
 test("moveItem moves across lanes to a position", async () => {
   const store = createStore({ path: path.join(await tmpDir(), "banny.json") });
   const k = await store.createColumn({ name: "k" });
