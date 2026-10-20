@@ -80,3 +80,18 @@ export function validateItemPatch(input) {
   if ("columnId" in input) out.columnId = input.columnId;
   return out;
 }
+
+export function validateItemMove(input) {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    throw new ItemValidationError("move must be a JSON object");
+  }
+  for (const key of Object.keys(input)) {
+    if (key !== "columnId" && key !== "before") throw new ItemValidationError(`unknown field: ${key}`);
+  }
+  if (!("columnId" in input)) throw new ItemValidationError("columnId is required");
+  checkColumnId(input.columnId);
+  if ("before" in input && input.before !== null && (typeof input.before !== "string" || input.before.length === 0)) {
+    throw new ItemValidationError("before must be null or a non-empty string");
+  }
+  return { columnId: input.columnId, before: input.before ?? null };
+}

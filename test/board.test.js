@@ -85,3 +85,12 @@ test("the page has the fixed ids and a single inline script", async () => {
     assert.ok(src.includes(needle), needle);
   }
 });
+
+test("the inline script names the drag contract", async () => {
+  const { base } = await start();
+  const body = await (await fetch(`${base}/`)).text();
+  const src = body.match(/<script>([\s\S]*?)<\/script>/)[1];
+  for (const needle of ["/move", "application/x-banny-item", "application/x-banny-column", "lane-grip"]) {
+    assert.ok(src.includes(needle), needle);
+  }
+});

@@ -194,12 +194,17 @@ When a user runs `banny column remove <id>`, the system SHALL remove the column,
 unassigning its items, and print `removed <id>`, or exit `4` naming the id when
 no column has it.
 
-When a user runs `banny move <item-id> <column-id>`, the system SHALL set the
-item's `columnId` to that column and print the item's list line; with `--none`
-it SHALL set `columnId` to `null` instead and take no column id. A missing item
-or column SHALL exit `4` naming it. If `validateItemPatch` throws
-`ItemValidationError`, then the system SHALL exit `3` with the error's message
-and SHALL NOT change the store.
+When a user runs `banny move <item-id> <column-id>`, the system SHALL move the
+item into that column through `validateItemMove` and the store's `moveItem`,
+placing it at the end of the lane, and print the item's list line; with
+`--none` it SHALL move the item into the unassigned lane instead and take no
+column id. Where `--before <item-id>` is given, the system SHALL place the item
+immediately before that item instead of at the end, so the verb also reorders a
+card within its own lane. A missing item, column, or `--before` item SHALL exit
+`4` naming it. If the `--before` item is the moved item itself or sits in a
+different lane than the target, or `validateItemMove` throws
+`ItemValidationError`, then the system SHALL exit `3` with a message and SHALL
+NOT change the store.
 
 #### Scenario: List and add columns
 - **WHEN** the board is empty and a user runs `banny columns`, then
@@ -218,11 +223,29 @@ and SHALL NOT change the store.
 - **THEN** the exit code is `0`, stdout is the item's list line, and the data
   file holds `milk` with `columnId` `c`
 
+#### Scenario: Reorder an item with --before
+- **WHEN** column `c` holds `milk` then `bread` and a user runs
+  `banny move <bread> <c> --before <milk>`
+- **THEN** the exit code is `0` and `banny list` prints `bread` before `milk`
+
+#### Scenario: Moving into a lane appends
+- **WHEN** column `c` holds `milk`, `eggs` was created earlier with no column,
+  and a user runs `banny move <eggs> <c>`
+- **THEN** the exit code is `0` and the data file's `items` array holds `milk`
+  before `eggs`
+
 #### Scenario: Unassign an item
 - **WHEN** the board holds item `milk` in column `c` and a user runs
   `banny move <milk> --none`
 - **THEN** the exit code is `0` and the data file holds `milk` with `columnId`
   `null`
+
+#### Scenario: Bad --before is refused
+- **WHEN** a user runs `banny move <milk> <c> --before <milk>`, then
+  `banny move <milk> <c> --before <an item in another lane>`, then
+  `banny move <milk> <c> --before no-such-item`
+- **THEN** the first two exit `3`, the third exits `4`, and the data file is
+  unchanged
 
 #### Scenario: Unknown ids
 - **WHEN** a user runs `banny column remove no-such-id`, then
