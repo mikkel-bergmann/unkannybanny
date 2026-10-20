@@ -139,8 +139,9 @@ export function createStore({ path } = {}) {
       }),
     remove: (id) =>
       run(async () => {
-        if (!items.some((i) => i.id === id)) return false;
-        await commit(items.filter((i) => i.id !== id));
+        const kept = items.filter((i) => i.id !== id && !i.done);
+        if (kept.length === items.length) return false;
+        await commit(kept);
         return true;
       }),
     listColumns: () => run(() => structuredClone(columns)),
