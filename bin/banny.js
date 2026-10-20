@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import { createStore } from "../src/store.js";
 import { serializeExport } from "../src/routes/export.js";
 import { computeStats } from "../src/routes/stats.js";
-import { validateNewItem, validateItemPatch, ItemValidationError } from "../src/items.js";
+import { validateNewItem, validateItemPatch, validateItemMove, ItemValidationError } from "../src/items.js";
 import { validateNewColumn, validateColumnPatch } from "../src/columns.js";
 
 const SAMPLE_ITEMS = Object.freeze([
@@ -171,8 +171,8 @@ export const commands = {
     },
   },
   move: {
-    usage: "banny move <item-id> <column-id> | <item-id> --none",
-    options: { none: { type: "boolean" } },
+    usage: "banny move <item-id> <column-id> | <item-id> --none [--before <item-id>]",
+    options: { none: { type: "boolean" }, before: { type: "string" } },
     async run({ args, values, store }) {
       if (values.none) {
         if (args.length !== 1) throw new UsageError("move --none needs exactly one item id");
@@ -184,7 +184,17 @@ export const commands = {
       if (columnId !== null && !(await store.getColumn(columnId))) {
         throw new NotFoundError(`no column with id ${columnId}`);
       }
-      const item = await store.update(id, validateItemPatch({ columnId }));
+      if (!(await store.get(id))) throw new NotFoundError(`no item with id ${id}`);
+      const before = values.before ?? null;
+      if (before !== null) {
+        const target = await store.get(before);
+        if (!target) throw new NotFoundError(`no item with id ${before}`);
+        if (before === id) throw new ItemValidationError("--before must not be the moved item");
+        if (target.columnId !== columnId) {
+          throw new ItemValidationError("--before names an item in another lane");
+        }
+      }
+      const item = await store.moveItem(id, validateItemMove({ columnId, before }));
       if (!item) throw new NotFoundError(`no item with id ${id}`);
       return { json: item, text: formatItem(item) };
     },

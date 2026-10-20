@@ -271,3 +271,51 @@ test("create and update refuse a column that no longer exists", async () => {
   assert.equal((await store.list()).length, 1);
   assert.equal((await store.update(item.id, { title: "b" })).title, "b");
 });
+
+test("moveItem places an item within a lane, across lanes, and at the end", async () => {
+  const dir = await tmpDir();
+  const file = path.join(dir, "banny.json");
+  const store = createStore({ path: file });
+  const k = await store.createColumn({ name: "K" });
+  const m = await store.createColumn({ name: "M" });
+  const a = await store.create({ ...sample, title: "a", columnId: k.id });
+  const b = await store.create({ ...sample, title: "b", columnId: k.id });
+  const c = await store.create({ ...sample, title: "c", columnId: k.id });
+  const titles = async () => (await store.list()).map((i) => i.title);
+  const movedC = await store.moveItem(c.id, { columnId: k.id, before: a.id });
+  assert.equal(movedC.id, c.id);
+  assert.deepEqual(await titles(), ["c", "a", "b"]);
+  const x = await store.create({ ...sample, title: "x", columnId: m.id });
+  const movedX = await store.moveItem(x.id, { columnId: k.id, before: b.id });
+  assert.equal(movedX.columnId, k.id);
+  assert.deepEqual(await titles(), ["c", "a", "x", "b"]);
+  await store.moveItem(c.id, { columnId: k.id, before: null });
+  assert.deepEqual(await titles(), ["a", "x", "b", "c"]);
+});
+
+test("moveItem to the end of the unassigned lane", async () => {
+  const store = createStore({ path: path.join(await tmpDir(), "banny.json") });
+  const a = await store.create({ ...sample, title: "a" });
+  await store.create({ ...sample, title: "b" });
+  await store.moveItem(a.id, { columnId: null, before: null });
+  assert.deepEqual((await store.list()).map((i) => i.title), ["b", "a"]);
+});
+
+test("moveItem on an unknown id resolves null and leaves the file alone", async () => {
+  const file = path.join(await tmpDir(), "banny.json");
+  const store = createStore({ path: file });
+  await store.create(sample);
+  const text = await fs.readFile(file, "utf8");
+  assert.equal(await store.moveItem("no-such-id", { columnId: null, before: null }), null);
+  assert.equal(await fs.readFile(file, "utf8"), text);
+});
+
+test("an existing file keeps its array order as card order", async () => {
+  const file = path.join(await tmpDir(), "banny.json");
+  const mk = (t) => ({ id: t, title: t, done: false, tags: [], columnId: null, createdAt: "x", updatedAt: "x" });
+  const text = JSON.stringify({ items: [mk("a"), mk("b"), mk("c")] });
+  await fs.writeFile(file, text);
+  const store = createStore({ path: file });
+  assert.deepEqual((await store.list()).map((i) => i.id), ["a", "b", "c"]);
+  assert.equal(await fs.readFile(file, "utf8"), text);
+});

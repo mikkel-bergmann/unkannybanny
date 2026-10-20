@@ -266,3 +266,32 @@ test("move with unknown ids exits 4", async () => {
   assert.equal(banny(file, "move", "no-such-item", column.id).status, 4);
   assert.equal(banny(file, "move", item.id, "no-such-column").status, 4);
 });
+
+test("move --before reorders, and a plain move appends", async () => {
+  const { file } = await tmpFile();
+  const store = createStore({ path: file });
+  const col = await store.createColumn({ name: "C" });
+  const eggs = await store.create({ title: "eggs", done: false, tags: [] });
+  const milk = await store.create({ title: "milk", done: false, tags: [], columnId: col.id });
+  const bread = await store.create({ title: "bread", done: false, tags: [], columnId: col.id });
+  const r = banny(file, "move", bread.id, col.id, "--before", milk.id);
+  assert.equal(r.status, 0);
+  const listed = banny(file, "list").stdout;
+  assert.ok(listed.indexOf("bread") < listed.indexOf("milk"));
+  assert.equal(banny(file, "move", eggs.id, col.id).status, 0);
+  const titles = JSON.parse(await fs.readFile(file, "utf8")).items.map((i) => i.title);
+  assert.deepEqual(titles, ["bread", "milk", "eggs"]);
+});
+
+test("move --before refuses self and other-lane, and exits 4 for an unknown item", async () => {
+  const { file } = await tmpFile();
+  const store = createStore({ path: file });
+  const col = await store.createColumn({ name: "C" });
+  const milk = await store.create({ title: "milk", done: false, tags: [], columnId: col.id });
+  const loose = await store.create({ title: "loose", done: false, tags: [] });
+  const text = await fs.readFile(file, "utf8");
+  assert.equal(banny(file, "move", milk.id, col.id, "--before", milk.id).status, 3);
+  assert.equal(banny(file, "move", milk.id, col.id, "--before", loose.id).status, 3);
+  assert.equal(banny(file, "move", milk.id, col.id, "--before", "no-such-item").status, 4);
+  assert.equal(await fs.readFile(file, "utf8"), text);
+});
