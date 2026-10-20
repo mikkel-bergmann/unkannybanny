@@ -6,6 +6,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createStore } from "../src/store.js";
+import { ItemReferenceError } from "../src/items.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -327,4 +328,59 @@ test("moveItem places a downward move before its target", async () => {
   for (const title of ["a", "b", "c"]) made.push(await store.create({ title, done: false, tags: [], columnId: lane.id }));
   await store.moveItem(made[0].id, { columnId: lane.id, before: made[2].id });
   assert.deepEqual((await store.list()).map((i) => i.title), ["b", "a", "c"]);
+});
+
+const refError = (reason, extra = {}) => (err) =>
+  err instanceof ItemReferenceError &&
+  err.code === "invalid-item" &&
+  err.reason === reason &&
+  Object.entries(extra).every(([k, v]) => err[k] === v);
+
+async function laneStore() {
+  const file = path.join(await tmpDir(), "banny.json");
+  const store = createStore({ path: file });
+  const k = await store.createColumn({ name: "K" });
+  const m = await store.createColumn({ name: "M" });
+  const a = await store.create({ ...sample, title: "a", columnId: k.id });
+  const x = await store.create({ ...sample, title: "x" });
+  return { file, store, k, m, a, x };
+}
+
+test("a before item deleted ahead of a queued move is refused inside the write", async () => {
+  const { file, store, k, a, x } = await laneStore();
+  const removed = store.remove(a.id);
+  const moved = store.moveItem(x.id, { columnId: k.id, before: a.id });
+  assert.equal(await removed, true);
+  const text = await fs.readFile(file, "utf8");
+  await assert.rejects(moved, refError("before-missing", { ref: a.id, itemMissing: false }));
+  assert.equal(await fs.readFile(file, "utf8"), text);
+  assert.equal((await store.get(x.id)).columnId, null);
+});
+
+test("a before item moved to another lane ahead of a queued move is refused", async () => {
+  const { store, k, m, a, x } = await laneStore();
+  const first = store.moveItem(a.id, { columnId: m.id, before: null });
+  const second = store.moveItem(x.id, { columnId: k.id, before: a.id });
+  assert.ok(await first);
+  await assert.rejects(second, refError("before-lane"));
+  assert.equal((await store.get(x.id)).columnId, null);
+});
+
+test("self, missing-column, and unknown-id moves are refused without a write", async () => {
+  const { file, store, k, a, x } = await laneStore();
+  const text = await fs.readFile(file, "utf8");
+  await assert.rejects(store.moveItem(a.id, { columnId: k.id, before: a.id }), refError("before-self"));
+  await assert.rejects(store.moveItem(a.id, { columnId: "nope", before: null }), (err) =>
+    refError("column")(err) && err.message === "columnId names no column: nope");
+  await assert.rejects(
+    store.moveItem("no-such-id", { columnId: null, before: a.id }),
+    refError("before-lane", { itemMissing: true }),
+  );
+  await assert.rejects(
+    store.moveItem("no-such-id", { columnId: k.id, before: "gone" }),
+    refError("before-missing", { itemMissing: true }),
+  );
+  assert.equal(await fs.readFile(file, "utf8"), text);
+  assert.ok(await store.moveItem(x.id, { columnId: k.id, before: a.id }));
+  assert.deepEqual((await store.list()).map((i) => i.title), ["x", "a"]);
 });
