@@ -113,6 +113,16 @@ test("update and remove of an unknown id leave the file unchanged", async () => 
   assert.deepEqual(await fs.readFile(file), before);
 });
 
+test("remove keeps a done sibling, and an unknown id keeps done items", async () => {
+  const store = createStore({ path: path.join(await tmpDir(), "banny.json") });
+  const a = await store.create(sample);
+  const b = await store.create(sample);
+  await store.update(b.id, { done: true });
+  assert.equal(await store.remove("no-such-id"), false);
+  assert.equal(await store.remove(a.id), true);
+  assert.deepEqual((await store.list()).map((i) => i.id), [b.id]);
+});
+
 test("50 overlapping creates all land", async () => {
   const file = path.join(await tmpDir(), "banny.json");
   const store = createStore({ path: file });

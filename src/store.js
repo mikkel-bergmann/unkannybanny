@@ -139,7 +139,7 @@ export function createStore({ path } = {}) {
       }),
     remove: (id) =>
       run(async () => {
-        const kept = items.filter((i) => i.id !== id && !i.done);
+        const kept = items.filter((i) => i.id !== id);
         if (kept.length === items.length) return false;
         await commit(kept);
         return true;
