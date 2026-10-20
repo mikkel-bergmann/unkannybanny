@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { validateNewItem, validateItemPatch, validateItemMove, ItemValidationError } from "../src/items.js";
+import { validateNewItem, validateItemPatch, ItemValidationError } from "../src/items.js";
 import { createApp } from "../src/app.js";
 import { createStore } from "../src/store.js";
 
@@ -203,57 +203,4 @@ test("patch clears a column id and refuses an unknown one", async () => {
   const bogus = await send(base, "PATCH", `/items/${item.id}`, '{"columnId":"nope"}');
   assert.equal(bogus.status, 400);
   assert.equal((await bogus.json()).error.code, "invalid-item");
-});
-
-test("validateItemMove defaults before and rejects bad shapes", () => {
-  assert.deepEqual(validateItemMove({ columnId: "c" }), { columnId: "c", before: null });
-  for (const input of [
-    {},
-    { columnId: "" },
-    { columnId: null, before: 1 },
-    { columnId: null, title: "x" },
-    [],
-  ]) {
-    invalid(() => validateItemMove(input));
-  }
-});
-
-test("POST /items/:id/move places a card before another", async () => {
-  const { base } = await start();
-  const column = await (await send(base, "POST", "/columns", '{"name":"Doing"}')).json();
-  const make = async (title, columnId) =>
-    (await (await send(base, "POST", "/items", JSON.stringify({ title, columnId }))).json());
-  const a = await make("a", column.id);
-  const b = await make("b", column.id);
-  const x = await make("x", null);
-  const ids = async () => (await (await fetch(`${base}/items`)).json()).items.map((i) => i.id);
-  const res = await send(base, "POST", `/items/${x.id}/move`, JSON.stringify({ columnId: column.id, before: b.id }));
-  assert.equal(res.status, 200);
-  assert.equal((await res.json()).columnId, column.id);
-  assert.deepEqual(await ids(), [a.id, x.id, b.id]);
-  const bad = [
-    { columnId: column.id, before: a.id },
-    { columnId: null, before: b.id },
-    { columnId: column.id, before: "no-such-item" },
-    { columnId: "nope" },
-  ];
-  for (const body of bad) {
-    const r = await send(base, "POST", `/items/${a.id}/move`, JSON.stringify(body));
-    assert.equal(r.status, 400, JSON.stringify(body));
-    assert.equal((await r.json()).error.code, "invalid-item");
-  }
-  const self = await send(base, "POST", `/items/${a.id}/move`, JSON.stringify({ columnId: column.id, before: a.id }));
-  assert.equal(self.status, 400);
-  assert.deepEqual(await ids(), [a.id, x.id, b.id]);
-});
-
-test("POST /items/:id/move answers 404 and 415", async () => {
-  const { base } = await start();
-  const missing = await send(base, "POST", "/items/no-such-id/move", '{"columnId":null}');
-  assert.equal(missing.status, 404);
-  assert.equal((await missing.json()).error.code, "not-found");
-  const plain = await send(base, "POST", "/items/no-such-id/move", '{"columnId":null}', {
-    "content-type": "text/plain",
-  });
-  assert.equal(plain.status, 415);
 });

@@ -16,7 +16,6 @@
   .lane { flex: 0 0 15rem; background: #f6f8fb; border: 1px solid #dde3ec; border-radius: 0.5rem; padding: 0.5rem; }
   .lane-head { display: flex; gap: 0.3rem; align-items: center; margin-bottom: 0.5rem; }
   .lane-head input { flex: 1 1 auto; min-width: 0; padding: 0.3rem; }
-  .lane-grip { cursor: grab; }
   .lane-head .lane-name { font-weight: 600; }
   .cards { list-style: none; padding: 0; margin: 0; min-height: 2rem; }
   .cards li { padding: 0.4rem; border: 1px solid #ddd; border-radius: 0.3rem; background: #fff; margin-bottom: 0.4rem; }
@@ -90,22 +89,12 @@ function renderTags(tags) {
   for (const { tag, count } of tags) add(`${tag} (${count})`, tag);
 }
 
-function renderCard(item, columnId) {
+function renderCard(item) {
   const card = document.createElement("li");
   if (item.done) card.className = "done";
   card.draggable = true;
   card.addEventListener("dragstart", (event) => {
-    event.dataTransfer.setData("application/x-banny-item", item.id);
-  });
-  card.addEventListener("dragover", (event) => {
-    if (event.dataTransfer.types.includes("application/x-banny-item")) event.preventDefault();
-  });
-  card.addEventListener("drop", (event) => {
-    const id = event.dataTransfer.getData("application/x-banny-item");
-    if (!id) return;
-    event.preventDefault();
-    event.stopPropagation();
-    if (id !== item.id) moveItem(id, columnId, item.id);
+    event.dataTransfer.setData("text/plain", item.id);
   });
   const label = document.createElement("label");
   const checkbox = document.createElement("input");
@@ -168,15 +157,7 @@ function renderLane(lane, laneItems, index, orderedColumns) {
     remove.textContent = "\u2715";
     remove.setAttribute("aria-label", "Remove " + lane.name);
     remove.addEventListener("click", () => removeColumn(lane.id));
-    const grip = document.createElement("span");
-    grip.className = "lane-grip";
-    grip.textContent = "\u2630";
-    grip.draggable = true;
-    grip.title = "Drag to reorder";
-    grip.addEventListener("dragstart", (event) => {
-      event.dataTransfer.setData("application/x-banny-column", lane.id);
-    });
-    head.append(grip, left, name, right, remove);
+    head.append(left, name, right, remove);
   }
   section.appendChild(head);
   const list = document.createElement("ul");
@@ -187,27 +168,13 @@ function renderLane(lane, laneItems, index, orderedColumns) {
     empty.textContent = "No items";
     list.appendChild(empty);
   }
-  for (const item of laneItems) list.appendChild(renderCard(item, lane.id === "" ? null : lane.id));
+  for (const item of laneItems) list.appendChild(renderCard(item));
   section.appendChild(list);
-  section.addEventListener("dragover", (event) => {
-    const types = event.dataTransfer.types;
-    if (types.includes("application/x-banny-item") || types.includes("application/x-banny-column")) {
-      event.preventDefault();
-    }
-  });
+  section.addEventListener("dragover", (event) => event.preventDefault());
   section.addEventListener("drop", (event) => {
     event.preventDefault();
-    const itemId = event.dataTransfer.getData("application/x-banny-item");
-    if (itemId) {
-      moveItem(itemId, lane.id === "" ? null : lane.id, null);
-      return;
-    }
-    const columnId = event.dataTransfer.getData("application/x-banny-column");
-    if (columnId) {
-      const from = orderedColumns.findIndex((c) => c.id === columnId);
-      const to = lane.id === "" ? orderedColumns.length - 1 : index;
-      if (from !== -1 && from !== to) moveColumn(from, to, orderedColumns);
-    }
+    const id = event.dataTransfer.getData("text/plain");
+    if (id) moveItem(id, lane.id === "" ? null : lane.id);
   });
   return section;
 }
@@ -227,9 +194,9 @@ function renderBoard(columns, items) {
   }
 }
 
-async function moveItem(id, columnId, before) {
+async function moveItem(id, columnId) {
   try {
-    await api("POST", "/items/" + encodeURIComponent(id) + "/move", { columnId, before });
+    await api("PATCH", "/items/" + encodeURIComponent(id), { columnId });
     showStatus("");
     await refresh();
   } catch (err) {
