@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { validateNewItem, validateItemPatch, validateItemMove, ItemValidationError } from "../src/items.js";
+import { validateNewItem, validateItemPatch, ItemValidationError } from "../src/items.js";
 import { createApp } from "../src/app.js";
 import { createStore } from "../src/store.js";
 
@@ -203,94 +203,4 @@ test("patch clears a column id and refuses an unknown one", async () => {
   const bogus = await send(base, "PATCH", `/items/${item.id}`, '{"columnId":"nope"}');
   assert.equal(bogus.status, 400);
   assert.equal((await bogus.json()).error.code, "invalid-item");
-});
-
-test("validateItemMove defaults before and refuses bad shapes", () => {
-  assert.deepEqual(validateItemMove({ columnId: "c" }), { columnId: "c", before: null });
-  for (const input of [{}, { columnId: "" }, { columnId: null, before: 1 }, { columnId: null, title: "x" }, []]) {
-    invalid(() => validateItemMove(input));
-  }
-});
-
-test("POST /items/:id/move places a card and refuses bad positions", async () => {
-  const { base } = await start();
-  const col = await (await send(base, "POST", "/columns", '{"name":"K"}')).json();
-  const other = await (await send(base, "POST", "/columns", '{"name":"M"}')).json();
-  const mk = async (title, columnId) =>
-    (await (await send(base, "POST", "/items", JSON.stringify({ title, columnId }))).json());
-  const a = await mk("a", col.id);
-  const b = await mk("b", col.id);
-  const x = await mk("x", null);
-  const y = await mk("y", other.id);
-  const order = async () => (await (await fetch(`${base}/items`)).json()).items.map((i) => i.title);
-  const move = (id, body) => send(base, "POST", `/items/${id}/move`, JSON.stringify(body));
-  const res = await move(x.id, { columnId: col.id, before: b.id });
-  assert.equal(res.status, 200);
-  assert.equal((await res.json()).columnId, col.id);
-  assert.deepEqual(await order(), ["a", "x", "b", "y"]);
-  for (const body of [
-    { columnId: col.id, before: a.id },
-    { columnId: col.id, before: y.id },
-    { columnId: col.id, before: "no-such-item" },
-    { columnId: "nope" },
-  ]) {
-    const bad = await move(a.id, body);
-    assert.equal(bad.status, 400);
-    assert.equal((await bad.json()).error.code, "invalid-item");
-    assert.deepEqual(await order(), ["a", "x", "b", "y"]);
-  }
-  const gone = await move("no-such-id", { columnId: null });
-  assert.equal(gone.status, 404);
-  assert.equal((await gone.json()).error.code, "not-found");
-  const text = await send(base, "POST", `/items/${a.id}/move`, '{"columnId":null}', { "content-type": "text/plain" });
-  assert.equal(text.status, 415);
-});
-
-test("a before item deleted during a move is refused", async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "banny-"));
-  const store = createStore({ path: path.join(dir, "banny.json") });
-  const k = await store.createColumn({ name: "K" });
-  const a = await store.create({ title: "a", done: false, tags: [], columnId: k.id });
-  const x = await store.create({ title: "x", done: false, tags: [], columnId: null });
-  const wrapped = {
-    ...store,
-    moveItem: (id, input) => {
-      store.remove(a.id);
-      return store.moveItem(id, input);
-    },
-  };
-  const app = createApp({ store: wrapped });
-  const server = await new Promise((resolve) => {
-    const s = app.listen(0, "127.0.0.1", () => resolve(s));
-  });
-  servers.push(server);
-  const base = `http://127.0.0.1:${server.address().port}`;
-  const res = await send(base, "POST", `/items/${x.id}/move`, JSON.stringify({ columnId: k.id, before: a.id }));
-  assert.equal(res.status, 400);
-  assert.deepEqual((await res.json()).error, { code: "invalid-item", message: `before names no item: ${a.id}` });
-  assert.equal((await store.get(x.id)).columnId, null);
-});
-
-test("POST /items/:id/move keeps its messages and check precedence", async () => {
-  const { base } = await start();
-  const col = await (await send(base, "POST", "/columns", '{"name":"K"}')).json();
-  const other = await (await send(base, "POST", "/columns", '{"name":"M"}')).json();
-  const mk = async (title, columnId) =>
-    (await (await send(base, "POST", "/items", JSON.stringify({ title, columnId }))).json());
-  const a = await mk("a", col.id);
-  const y = await mk("y", other.id);
-  const move = async (id, body) => {
-    const res = await send(base, "POST", `/items/${id}/move`, JSON.stringify(body));
-    return [res.status, (await res.json()).error];
-  };
-  const bad = (message) => [400, { code: "invalid-item", message }];
-  assert.deepEqual(await move(a.id, { columnId: col.id, before: a.id }), bad("before must not be the moved item"));
-  assert.deepEqual(await move(a.id, { columnId: col.id, before: y.id }), bad("before names an item in another column"));
-  assert.deepEqual(await move(a.id, { columnId: col.id, before: "zz" }), bad("before names no item: zz"));
-  assert.deepEqual(await move("no-such-id", { columnId: "nope" }), bad("columnId names no column: nope"));
-  assert.deepEqual(await move("no-such-id", { columnId: col.id, before: y.id }), bad("before names an item in another column"));
-  assert.deepEqual(await move("no-such-id", { columnId: col.id, before: a.id }), [
-    404,
-    { code: "not-found", message: "no item with id no-such-id" },
-  ]);
 });

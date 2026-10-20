@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import crypto from "node:crypto";
 import nodePath from "node:path";
-import { ItemReferenceError } from "./items.js";
+import { ItemValidationError } from "./items.js";
 
 export function createStore({ path } = {}) {
   const file = nodePath.resolve(path ?? process.env.BANNY_DATA ?? "data/banny.json");
@@ -81,7 +81,7 @@ export function createStore({ path } = {}) {
 
   function checkColumn(columnId) {
     if (columnId != null && !columns.some((c) => c.id === columnId)) {
-      throw new ItemReferenceError("column", columnId, `columnId names no column: ${columnId}`);
+      throw new ItemValidationError(`columnId names no column: ${columnId}`);
     }
   }
 
@@ -121,31 +121,6 @@ export function createStore({ path } = {}) {
         next.updatedAt = new Date().toISOString();
         const copy = [...items];
         copy[index] = next;
-        await commit(copy);
-        return structuredClone(next);
-      }),
-    moveItem: (id, { columnId, before } = {}) =>
-      run(async () => {
-        checkColumn(columnId);
-        const found = items.find((i) => i.id === id);
-        if (before != null) {
-          const missing = !found;
-          const target = items.find((i) => i.id === before);
-          if (!target) {
-            throw new ItemReferenceError("before-missing", before, `before names no item: ${before}`, missing);
-          }
-          if (before === id) {
-            throw new ItemReferenceError("before-self", before, "before must not be the moved item", missing);
-          }
-          if (target.columnId !== (columnId ?? null)) {
-            throw new ItemReferenceError("before-lane", before, "before names an item in another column", missing);
-          }
-        }
-        if (!found) return null;
-        const next = { ...found, columnId: columnId ?? null, updatedAt: new Date().toISOString() };
-        const copy = items.filter((i) => i.id !== id);
-        if (before == null) copy.push(next);
-        else copy.splice(copy.findIndex((i) => i.id === before), 0, next);
         await commit(copy);
         return structuredClone(next);
       }),

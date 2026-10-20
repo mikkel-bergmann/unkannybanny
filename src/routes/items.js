@@ -1,6 +1,6 @@
 import express, { Router } from "express";
 import { filterItems, InvalidQueryError } from "./tags.js";
-import { validateNewItem, validateItemPatch, validateItemMove, ItemValidationError } from "../items.js";
+import { validateNewItem, validateItemPatch, ItemValidationError } from "../items.js";
 
 function sendError(res, status, code, message) {
   res.status(status).json({ error: { code, message } });
@@ -47,13 +47,6 @@ export default function itemsRouter(store) {
     const patch = validateItemPatch(req.body);
     if ("columnId" in patch) await requireColumn(store, patch.columnId);
     const item = await store.update(req.params.id, patch);
-    if (!item) return notFound(res, req.params.id);
-    res.json(item);
-  }));
-
-  router.post("/items/:id/move", requireJson, express.json(), wrap(async (req, res) => {
-    const input = validateItemMove(req.body);
-    const item = await store.moveItem(req.params.id, input);
     if (!item) return notFound(res, req.params.id);
     res.json(item);
   }));
