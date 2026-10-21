@@ -8,7 +8,7 @@ description: >-
   ship-it/fix-required verdict. Use for every code review of this repository.
 ---
 
-<!-- shipd-copilot v0.6.340 -->
+<!-- shipd-copilot v0.6.343 -->
 
 # shipd semantic code review
 

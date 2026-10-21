@@ -1,4 +1,4 @@
-# shipd-copilot v0.6.340
+# shipd-copilot v0.6.343
 #
 # Provisions the environment GitHub Copilot code review runs in, so the shipd
 # review skill at .github/skills/code-review/ finds its optional tooling
