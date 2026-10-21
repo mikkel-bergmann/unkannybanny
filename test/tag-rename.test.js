@@ -91,3 +91,67 @@ test("renameTag to the same name writes nothing", async (t) => {
   assert.deepEqual(await store.list(), before);
   assert.equal(await fs.readFile(file, "utf8"), raw);
 });
+
+test("POST /tags/:tag/rename answers errors in the app's envelope", async (t) => {
+  const { dir, file } = await seeded();
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  await withServer(file, async (base) => {
+    const post = (tag, body) =>
+      fetch(`${base}/tags/${tag}/rename`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+      });
+    const bad = await post("shop", JSON.stringify({ to: "Bad Name" }));
+    assert.equal(bad.status, 400);
+    assert.equal((await bad.json()).error.code, "invalid-tag");
+    const missing = await post("nope", JSON.stringify({ to: "other" }));
+    assert.equal(missing.status, 404);
+    assert.equal((await missing.json()).error.code, "not-found");
+  });
+});
+
+test("POST /tags/:tag/rename answers 400 invalid-json to a malformed body", async (t) => {
+  const { dir, file } = await seeded();
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  await withServer(file, async (base) => {
+    const res = await fetch(`${base}/tags/shop/rename`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{not json",
+    });
+    assert.equal(res.status, 400);
+    assert.deepEqual((await res.json()).error.code, "invalid-json");
+  });
+});
+
+test("POST /tags/:tag/rename answers an oversized body as unreadable, not malformed", async (t) => {
+  const { dir, file } = await seeded();
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  await withServer(file, async (base) => {
+    const res = await fetch(`${base}/tags/shop/rename`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ to: "groceries", pad: "x".repeat(200 * 1024) }),
+    });
+    assert.equal(res.status, 400);
+    assert.deepEqual((await res.json()).error, {
+      code: "invalid-json",
+      message: "request body could not be read as JSON",
+    });
+  });
+});
+
+test("POST /tags/:tag/rename answers 415 to a non-JSON content type", async (t) => {
+  const { dir, file } = await seeded();
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  await withServer(file, async (base) => {
+    const res = await fetch(`${base}/tags/shop/rename`, {
+      method: "POST",
+      headers: { "content-type": "text/plain" },
+      body: JSON.stringify({ to: "groceries" }),
+    });
+    assert.equal(res.status, 415);
+    assert.equal((await res.json()).error.code, "unsupported-media-type");
+  });
+});
