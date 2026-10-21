@@ -144,6 +144,19 @@ export function createStore({ path } = {}) {
         await commit(kept);
         return true;
       }),
+    renameTag: (from, to) =>
+      run(async () => {
+        if (from === to) return items.filter((i) => i.tags.includes(from)).length;
+        const now = new Date().toISOString();
+        let renamed = 0;
+        const next = items.map((i) => {
+          if (!i.tags.includes(from)) return i;
+          renamed += 1;
+          return { ...i, tags: [...new Set(i.tags.map((t) => (t === from ? to : t)))], updatedAt: now };
+        });
+        if (renamed > 0) await commit(next);
+        return renamed;
+      }),
     listColumns: () => run(() => structuredClone(columns)),
     getColumn: (id) =>
       run(() => {

@@ -45,5 +45,20 @@ export default function tagsRouter(store) {
   router.get("/tags", (req, res, next) =>
     store.list().then((items) => res.json({ tags: countTags(items) })).catch(next),
   );
+  router.post("/tags/:tag/rename", express.json(), (req, res, next) => {
+    const from = req.params.tag;
+    const to = req.body?.to;
+    if (!TAG_RE.test(from) || typeof to !== "string" || !TAG_RE.test(to)) {
+      return res.status(400).json({ error: "invalid-tag", message: "tag names must be lowercase tag names" });
+    }
+    store
+      .renameTag(from, to)
+      .then((renamed) =>
+        renamed === 0
+          ? res.status(404).json({ error: "not-found", message: `no item has the tag ${from}` })
+          : res.json({ renamed }),
+      )
+      .catch(next);
+  });
   return router;
 }
