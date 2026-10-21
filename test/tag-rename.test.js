@@ -73,3 +73,21 @@ test("POST /tags/:tag/rename rejects a bad name and 404s an unknown tag", async 
     assert.equal((await post("nope", { to: "other" })).status, 404);
   });
 });
+
+test("renameTag onto a tag an item already carries leaves one copy", async (t) => {
+  const { dir, store } = await seeded();
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  assert.equal(await store.renameTag("shop", "kitchen"), 2);
+  const items = await store.list();
+  assert.deepEqual(items.map((i) => i.tags), [["kitchen"], ["kitchen"], ["garden"]]);
+});
+
+test("renameTag to the same name writes nothing", async (t) => {
+  const { dir, file, store } = await seeded();
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const before = await store.list();
+  const raw = await fs.readFile(file, "utf8");
+  assert.equal(await store.renameTag("shop", "shop"), 2);
+  assert.deepEqual(await store.list(), before);
+  assert.equal(await fs.readFile(file, "utf8"), raw);
+});

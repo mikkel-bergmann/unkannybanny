@@ -146,12 +146,13 @@ export function createStore({ path } = {}) {
       }),
     renameTag: (from, to) =>
       run(async () => {
+        if (from === to) return items.filter((i) => i.tags.includes(from)).length;
         const now = new Date().toISOString();
         let renamed = 0;
         const next = items.map((i) => {
           if (!i.tags.includes(from)) return i;
           renamed += 1;
-          return { ...i, tags: i.tags.map((t) => (t === from ? to : t)), updatedAt: now };
+          return { ...i, tags: [...new Set(i.tags.map((t) => (t === from ? to : t)))], updatedAt: now };
         });
         if (renamed > 0) await commit(next);
         return renamed;
