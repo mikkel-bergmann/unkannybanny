@@ -124,3 +124,34 @@ test("POST /tags/:tag/rename answers 400 invalid-json to a malformed body", asyn
     assert.deepEqual((await res.json()).error.code, "invalid-json");
   });
 });
+
+test("POST /tags/:tag/rename answers an oversized body as unreadable, not malformed", async (t) => {
+  const { dir, file } = await seeded();
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  await withServer(file, async (base) => {
+    const res = await fetch(`${base}/tags/shop/rename`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ to: "groceries", pad: "x".repeat(200 * 1024) }),
+    });
+    assert.equal(res.status, 400);
+    assert.deepEqual((await res.json()).error, {
+      code: "invalid-json",
+      message: "request body could not be read as JSON",
+    });
+  });
+});
+
+test("POST /tags/:tag/rename answers 415 to a non-JSON content type", async (t) => {
+  const { dir, file } = await seeded();
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  await withServer(file, async (base) => {
+    const res = await fetch(`${base}/tags/shop/rename`, {
+      method: "POST",
+      headers: { "content-type": "text/plain" },
+      body: JSON.stringify({ to: "groceries" }),
+    });
+    assert.equal(res.status, 415);
+    assert.equal((await res.json()).error.code, "unsupported-media-type");
+  });
+});

@@ -6,6 +6,13 @@ function sendError(res, status, code, message) {
   res.status(status).json({ error: { code, message } });
 }
 
+function requireJson(req, res, next) {
+  if (!req.is("application/json") || req.get("content-length") === "0") {
+    return sendError(res, 415, "unsupported-media-type", "request body must be application/json");
+  }
+  next();
+}
+
 export class InvalidQueryError extends Error {
   constructor(message) {
     super(message);
@@ -49,7 +56,7 @@ export default function tagsRouter(store) {
   router.get("/tags", (req, res, next) =>
     store.list().then((items) => res.json({ tags: countTags(items) })).catch(next),
   );
-  router.post("/tags/:tag/rename", express.json(), (req, res, next) => {
+  router.post("/tags/:tag/rename", requireJson, express.json(), (req, res, next) => {
     const from = req.params.tag;
     const to = req.body?.to;
     if (!TAG_RE.test(from) || typeof to !== "string" || !TAG_RE.test(to)) {
@@ -65,8 +72,11 @@ export default function tagsRouter(store) {
       .catch(next);
   });
   router.use((err, req, res, next) => {
-    if (typeof err.type === "string" && err.status >= 400 && err.status <= 499) {
+    if (err.type === "entity.parse.failed") {
       return sendError(res, 400, "invalid-json", "request body is not valid JSON");
+    }
+    if (typeof err.type === "string" && err.status >= 400 && err.status <= 499) {
+      return sendError(res, 400, "invalid-json", "request body could not be read as JSON");
     }
     next(err);
   });
