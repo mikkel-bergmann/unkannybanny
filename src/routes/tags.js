@@ -2,6 +2,10 @@ import express from "express";
 
 const TAG_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
+function sendError(res, status, code, message) {
+  res.status(status).json({ error: { code, message } });
+}
+
 export class InvalidQueryError extends Error {
   constructor(message) {
     super(message);
@@ -49,16 +53,22 @@ export default function tagsRouter(store) {
     const from = req.params.tag;
     const to = req.body?.to;
     if (!TAG_RE.test(from) || typeof to !== "string" || !TAG_RE.test(to)) {
-      return res.status(400).json({ error: "invalid-tag", message: "tag names must be lowercase tag names" });
+      return sendError(res, 400, "invalid-tag", "tag names must be lowercase tag names");
     }
     store
       .renameTag(from, to)
       .then((renamed) =>
         renamed === 0
-          ? res.status(404).json({ error: "not-found", message: `no item has the tag ${from}` })
+          ? sendError(res, 404, "not-found", `no item has the tag ${from}`)
           : res.json({ renamed }),
       )
       .catch(next);
+  });
+  router.use((err, req, res, next) => {
+    if (typeof err.type === "string" && err.status >= 400 && err.status <= 499) {
+      return sendError(res, 400, "invalid-json", "request body is not valid JSON");
+    }
+    next(err);
   });
   return router;
 }
