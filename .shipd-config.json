@@ -11,7 +11,8 @@
     "thread_resolution": true,
     "required_checks": [
       "ci",
-      "semantic-review"
+      "semantic-review",
+      "room-review/reviewer-b"
     ],
     "strict": false
   }
