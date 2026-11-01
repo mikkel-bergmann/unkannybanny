@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createStore } from "../src/store.js";
 import { createApp } from "../src/app.js";
+import { computeStats } from "../src/routes/stats.js";
 
 const BIN = fileURLToPath(new URL("../bin/banny.js", import.meta.url));
 
@@ -41,7 +42,7 @@ async function withServer(file, fn) {
   }
 }
 
-const SEEDED_STATS = { total: 3, done: 2, open: 1, tags: 2 };
+const SEEDED_STATS = { total: 3, done: 2, open: 1, tags: 2, columns: [], unassigned: 3 };
 
 test("GET /stats counts items, done, open and distinct tags", async () => {
   const { file } = await seeded();
@@ -57,7 +58,58 @@ test("GET /stats on an empty store is all zeros", async () => {
   await withServer(file, async (base) => {
     const res = await fetch(base + "/stats");
     assert.equal(res.status, 200);
-    assert.deepEqual(await res.json(), { total: 0, done: 0, open: 0, tags: 0 });
+    assert.deepEqual(await res.json(), { total: 0, done: 0, open: 0, tags: 0, columns: [], unassigned: 0 });
+  });
+});
+
+test("computeStats counts items per column in board order, unassigned last", () => {
+  const columns = [
+    { id: "b", name: "Backlog" },
+    { id: "d", name: "Doing" },
+    { id: "e", name: "Empty" },
+  ];
+  const items = [
+    { title: "a", done: false, tags: [], columnId: "d" },
+    { title: "b", done: true, tags: ["x"], columnId: "b" },
+    { title: "c", done: false, tags: ["x"], columnId: null },
+    { title: "d", done: false, tags: [], columnId: "gone" },
+  ];
+  assert.deepEqual(computeStats(items, columns), {
+    total: 4,
+    done: 1,
+    open: 3,
+    tags: 1,
+    columns: [
+      { id: "b", name: "Backlog", count: 1 },
+      { id: "d", name: "Doing", count: 1 },
+      { id: "e", name: "Empty", count: 0 },
+    ],
+    unassigned: 2,
+  });
+});
+
+test("GET /stats counts cards per column, with unassigned and dangling cards", async () => {
+  const { file } = await tmpFile();
+  const store = createStore({ path: file });
+  const backlog = await store.createColumn({ name: "Backlog" });
+  const doing = await store.createColumn({ name: "Doing" });
+  await store.create({ title: "in doing", columnId: doing.id });
+  await store.create({ title: "in backlog", columnId: backlog.id });
+  await store.create({ title: "no column" });
+  // The store refuses a columnId naming no column, so write the dangling card directly.
+  const data = JSON.parse(await fs.readFile(file, "utf8"));
+  data.items.push({ id: "ghost", title: "dangling", done: false, tags: [], columnId: "no-such-column" });
+  await fs.writeFile(file, JSON.stringify(data));
+  await withServer(file, async (base) => {
+    const res = await fetch(base + "/stats");
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.deepEqual(body.columns, [
+      { id: backlog.id, name: "Backlog", count: 1 },
+      { id: doing.id, name: "Doing", count: 1 },
+    ]);
+    assert.equal(body.unassigned, 2);
+    assert.equal(body.total, 4);
   });
 });
 
@@ -73,7 +125,23 @@ test("stats prints the counts as text", async () => {
   const { file } = await seeded();
   const r = banny(file, "stats");
   assert.equal(r.status, 0);
-  assert.equal(r.stdout, "total: 3\ndone: 2\nopen: 1\ntags: 2\n");
+  assert.equal(r.stdout, "total: 3\ndone: 2\nopen: 1\ntags: 2\nunassigned: 3\n");
+});
+
+test("stats prints a column line per column in board order, then unassigned", async () => {
+  const { file } = await tmpFile();
+  const store = createStore({ path: file });
+  await store.createColumn({ name: "Backlog" });
+  const doing = await store.createColumn({ name: "Doing" });
+  await store.create({ title: "in doing", done: false, tags: [], columnId: doing.id });
+  await store.create({ title: "loose", done: false, tags: [] });
+  await store.create({ title: "also loose", done: false, tags: [] });
+  const r = banny(file, "stats");
+  assert.equal(r.status, 0);
+  assert.equal(
+    r.stdout,
+    "total: 3\ndone: 0\nopen: 3\ntags: 0\ncolumn Backlog: 0\ncolumn Doing: 1\nunassigned: 2\n",
+  );
 });
 
 test("stats --json prints one compact line equal to GET /stats", async () => {

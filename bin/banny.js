@@ -111,11 +111,16 @@ export const commands = {
     options: {},
     async run({ args, store }) {
       if (args.length > 0) throw new UsageError("stats takes no arguments");
-      const stats = computeStats(await store.list());
-      return {
-        json: stats,
-        text: `total: ${stats.total}\ndone: ${stats.done}\nopen: ${stats.open}\ntags: ${stats.tags}`,
-      };
+      const stats = computeStats(await store.list(), await store.listColumns());
+      const lines = [
+        `total: ${stats.total}`,
+        `done: ${stats.done}`,
+        `open: ${stats.open}`,
+        `tags: ${stats.tags}`,
+        ...stats.columns.map((c) => `column ${c.name}: ${c.count}`),
+        `unassigned: ${stats.unassigned}`,
+      ];
+      return { json: stats, text: lines.join("\n") };
     },
   },
   columns: {
