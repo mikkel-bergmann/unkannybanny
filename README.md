@@ -47,6 +47,12 @@ node bin/banny.js column remove <id>            # delete it; its cards move to U
 On the board page, drag a card between lanes, edit a lane's name in place, and
 use the `◀` `▶` `✕` buttons to reorder or remove a column.
 
+## Progress
+
+`GET /stats/progress` returns `{"done": <n>, "total": <n>, "percent": <n>}`:
+the share of cards that are done, as a whole percent. An empty board reports
+`"percent": 0`.
+
 ## Run the tests
 
 ```sh
