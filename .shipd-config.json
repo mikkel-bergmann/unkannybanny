@@ -15,5 +15,8 @@
       "room-review/axel-reviewer"
     ],
     "strict": false
+  },
+  "factory": {
+    "author_fixes": true
   }
 }
