@@ -22,7 +22,8 @@ export function computeStats(items, columns = []) {
 // The share of cards that are done, as a whole percent. An empty board is 0% done.
 export function computeProgress(items) {
   const done = items.filter((i) => i.done).length;
-  return { done, total: items.length, percent: Math.round((done / items.length) * 100) };
+  const percent = items.length === 0 ? 0 : Math.round((done / items.length) * 100);
+  return { done, total: items.length, percent };
 }
 
 export default function statsRouter(store) {

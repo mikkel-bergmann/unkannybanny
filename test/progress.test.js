@@ -20,6 +20,10 @@ test("computeProgress is 0 when no card is done", () => {
   assert.equal(computeProgress([{ done: false }]).percent, 0);
 });
 
+test("computeProgress is 0 on an empty board", () => {
+  assert.deepEqual(computeProgress([]), { done: 0, total: 0, percent: 0 });
+});
+
 test("GET /stats/progress answers the seeded board's progress", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "banny-progress-"));
   const file = path.join(dir, "banny.json");
