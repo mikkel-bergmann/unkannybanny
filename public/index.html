@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Banny board</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 1rem; }
+  main { max-width: 60rem; margin: 0 auto; }
+  form { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem; }
+  form input { padding: 0.4rem; }
+  nav { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 1rem; }
+  button { padding: 0.3rem 0.7rem; cursor: pointer; }
+  [aria-pressed="true"] { background: #1a5fd0; color: #fff; border: 1px solid #1a5fd0; }
+  .board { display: flex; gap: 0.8rem; align-items: flex-start; overflow-x: auto; }
+  .lane { flex: 0 0 15rem; background: #f6f8fb; border: 1px solid #dde3ec; border-radius: 0.5rem; padding: 0.5rem; }
+  .lane-head { display: flex; gap: 0.3rem; align-items: center; margin-bottom: 0.5rem; }
+  .lane-head input { flex: 1 1 auto; min-width: 0; padding: 0.3rem; }
+  .lane-grip { cursor: grab; }
+  .lane-head .lane-name { font-weight: 600; }
+  .cards { list-style: none; padding: 0; margin: 0; min-height: 2rem; }
+  .cards li { padding: 0.4rem; border: 1px solid #ddd; border-radius: 0.3rem; background: #fff; margin-bottom: 0.4rem; }
+  .cards li.done { text-decoration: line-through; color: #777; }
+  .cards li.empty { color: #777; border: none; background: none; }
+  .tag { display: inline-block; margin-left: 0.4rem; padding: 0 0.5rem; border-radius: 999px; background: #e6edf8; color: #234; font-size: 0.8rem; }
+  #status { min-height: 1.2rem; color: #b00020; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Banny board</h1>
+  <form id="add-form">
+    <input id="add-title" name="title" required maxlength="200" placeholder="New item">
+    <input id="add-tags" name="tags" placeholder="tags, comma, separated">
+    <button type="submit">Add</button>
+  </form>
+  <form id="column-add-form">
+    <input id="column-add-name" name="name" required maxlength="100" placeholder="New column">
+    <button type="submit">Add column</button>
+  </form>
+  <nav id="tag-filter" aria-label="Filter by tag"></nav>
+  <div id="item-list" class="board"></div>
+  <p id="status" role="status" aria-live="polite"></p>
+</main>
+<script>
+let activeTag = null;
+const $ = (id) => document.getElementById(id);
+function showStatus(text) {
+  $("status").textContent = text;
+}
+
+async function api(method, path, body) {
+  let res;
+  try {
+    res = await fetch(path, {
+      method,
+      headers: body === undefined ? {} : { "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (err) {
+    throw new Error("Could not reach the server");
+  }
+  if (res.status === 204) return null;
+  let data = null;
+  try {
+    data = await res.json();
+  } catch (err) {
+    data = null;
+  }
+  if (!res.ok) throw new Error(data?.error?.message ?? "Request failed");
+  return data;
+}
+
+function renderTags(tags) {
+  if (activeTag !== null && !tags.some((entry) => entry.tag === activeTag)) activeTag = null;
+  const nav = $("tag-filter");
+  nav.replaceChildren();
+  const add = (label, value) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = label;
+    button.setAttribute("aria-pressed", activeTag === value ? "true" : "false");
+    button.addEventListener("click", () => {
+      activeTag = value;
+      refresh();
+    });
+    nav.appendChild(button);
+  };
+  add("All", null);
+  for (const { tag, count } of tags) add(`${tag} (${count})`, tag);
+}
+
+function renderCard(item, columnId) {
+  const card = document.createElement("li");
+  if (item.done) card.className = "done";
+  card.draggable = true;
+  card.addEventListener("dragstart", (event) => {
+    event.dataTransfer.setData("application/x-banny-item", item.id);
+  });
+  card.addEventListener("dragover", (event) => {
+    if (event.dataTransfer.types.includes("application/x-banny-item")) event.preventDefault();
+  });
+  card.addEventListener("drop", (event) => {
+    const id = event.dataTransfer.getData("application/x-banny-item");
+    if (!id) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (id !== item.id) moveItem(id, columnId, item.id);
+  });
+  const label = document.createElement("label");
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.checked = item.done;
+  checkbox.addEventListener("change", async () => {
+    try {
+      await api("PATCH", "/items/" + encodeURIComponent(item.id), { done: checkbox.checked });
+      showStatus("");
+      await refresh();
+    } catch (err) {
+      checkbox.checked = !checkbox.checked;
+      showStatus(err.message);
+    }
+  });
+  const title = document.createElement("span");
+  title.textContent = item.title;
+  label.append(checkbox, " ", title);
+  card.appendChild(label);
+  for (const tag of item.tags) {
+    const span = document.createElement("span");
+    span.className = "tag";
+    span.textContent = tag;
+    card.appendChild(span);
+  }
+  return card;
+}
+
+function renderLane(lane, laneItems, index, orderedColumns) {
+  const section = document.createElement("section");
+  section.className = "lane";
+  section.setAttribute("data-column-id", lane.id);
+  const head = document.createElement("header");
+  head.className = "lane-head";
+  if (lane.id === "") {
+    const name = document.createElement("span");
+    name.className = "lane-name";
+    name.textContent = lane.name;
+    head.appendChild(name);
+  } else {
+    const left = document.createElement("button");
+    left.type = "button";
+    left.textContent = "\u25C0";
+    left.setAttribute("aria-label", "Move " + lane.name + " left");
+    left.disabled = index === 0;
+    left.addEventListener("click", () => moveColumn(index, index - 1, orderedColumns));
+    const name = document.createElement("input");
+    name.className = "lane-name";
+    name.value = lane.name;
+    name.setAttribute("aria-label", "Column name");
+    name.addEventListener("change", () => renameColumn(lane.id, name.value));
+    const right = document.createElement("button");
+    right.type = "button";
+    right.textContent = "\u25B6";
+    right.setAttribute("aria-label", "Move " + lane.name + " right");
+    right.disabled = index === orderedColumns.length - 1;
+    right.addEventListener("click", () => moveColumn(index, index + 1, orderedColumns));
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "\u2715";
+    remove.setAttribute("aria-label", "Remove " + lane.name);
+    remove.addEventListener("click", () => removeColumn(lane.id));
+    const grip = document.createElement("span");
+    grip.className = "lane-grip";
+    grip.textContent = "\u2630";
+    grip.draggable = true;
+    grip.title = "Drag to reorder";
+    grip.addEventListener("dragstart", (event) => {
+      event.dataTransfer.setData("application/x-banny-column", lane.id);
+    });
+    head.append(grip, left, name, right, remove);
+  }
+  section.appendChild(head);
+  const list = document.createElement("ul");
+  list.className = "cards";
+  if (laneItems.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "empty";
+    empty.textContent = "No items";
+    list.appendChild(empty);
+  }
+  for (const item of laneItems) list.appendChild(renderCard(item, lane.id === "" ? null : lane.id));
+  section.appendChild(list);
+  section.addEventListener("dragover", (event) => {
+    const types = event.dataTransfer.types;
+    if (types.includes("application/x-banny-item") || types.includes("application/x-banny-column")) {
+      event.preventDefault();
+    }
+  });
+  section.addEventListener("drop", (event) => {
+    event.preventDefault();
+    const itemId = event.dataTransfer.getData("application/x-banny-item");
+    if (itemId) {
+      moveItem(itemId, lane.id === "" ? null : lane.id, null);
+      return;
+    }
+    const columnId = event.dataTransfer.getData("application/x-banny-column");
+    if (columnId) {
+      const from = orderedColumns.findIndex((c) => c.id === columnId);
+      const to = lane.id === "" ? orderedColumns.length - 1 : index;
+      if (from !== -1 && from !== to) moveColumn(from, to, orderedColumns);
+    }
+  });
+  return section;
+}
+
+function renderBoard(columns, items) {
+  const board = $("item-list");
+  board.replaceChildren();
+  const known = new Set(columns.map((c) => c.id));
+  const lanes = columns.map((c) => ({ id: c.id, name: c.name }));
+  lanes.push({ id: "", name: "Unassigned" });
+  for (let index = 0; index < lanes.length; index++) {
+    const lane = lanes[index];
+    const laneItems = items.filter((item) =>
+      lane.id === "" ? item.columnId === null || !known.has(item.columnId) : item.columnId === lane.id,
+    );
+    board.appendChild(renderLane(lane, laneItems, index, columns));
+  }
+}
+
+async function moveItem(id, columnId, before) {
+  try {
+    await api("POST", "/items/" + encodeURIComponent(id) + "/move", { columnId, before });
+    showStatus("");
+    await refresh();
+  } catch (err) {
+    showStatus(err.message);
+  }
+}
+
+async function moveColumn(from, to, orderedColumns) {
+  const ids = orderedColumns.map((c) => c.id);
+  const moved = ids.splice(from, 1)[0];
+  ids.splice(to, 0, moved);
+  try {
+    await api("PUT", "/columns/order", { ids });
+    showStatus("");
+    await refresh();
+  } catch (err) {
+    showStatus(err.message);
+  }
+}
+
+async function renameColumn(id, name) {
+  try {
+    await api("PATCH", "/columns/" + encodeURIComponent(id), { name });
+    showStatus("");
+    await refresh();
+  } catch (err) {
+    showStatus(err.message);
+  }
+}
+
+async function removeColumn(id) {
+  try {
+    await api("DELETE", "/columns/" + encodeURIComponent(id));
+    showStatus("");
+    await refresh();
+  } catch (err) {
+    showStatus(err.message);
+  }
+}
+
+let refreshSeq = 0;
+async function refresh() {
+  const seq = ++refreshSeq;
+  try {
+    const { columns } = await api("GET", "/columns");
+    if (seq !== refreshSeq) return;
+    const { tags } = await api("GET", "/tags");
+    if (seq !== refreshSeq) return;
+    renderTags(tags);
+    const { items } = await api("GET", activeTag === null ? "/items" : "/items?tag=" + encodeURIComponent(activeTag));
+    if (seq !== refreshSeq) return;
+    renderBoard(columns, items);
+    showStatus("");
+  } catch (err) {
+    if (seq === refreshSeq) showStatus(err.message);
+  }
+}
+
+$("add-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const title = $("add-title").value;
+  const tags = $("add-tags").value.split(",").map((s) => s.trim()).filter(Boolean);
+  try {
+    await api("POST", "/items", { title, tags });
+    $("add-form").reset();
+    showStatus("");
+    await refresh();
+  } catch (err) {
+    showStatus(err.message);
+  }
+});
+
+$("column-add-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const name = $("column-add-name").value;
+  try {
+    await api("POST", "/columns", { name });
+    $("column-add-form").reset();
+    showStatus("");
+    await refresh();
+  } catch (err) {
+    showStatus(err.message);
+  }
+});
+
+refresh();
+</script>
+</body>
+</html>
