@@ -1,0 +1,22 @@
+{
+  "valid_themes": [
+    "banny-board",
+    "platform",
+    "developer-experience"
+  ],
+  "merge": {
+    "approvals": 1,
+    "dismiss_stale": true,
+    "last_push_approval": false,
+    "thread_resolution": true,
+    "required_checks": [
+      "ci",
+      "semantic-review",
+      "room-review/shipd-factory-reviewer"
+    ],
+    "strict": false
+  },
+  "factory": {
+    "author_fixes": true
+  }
+}
