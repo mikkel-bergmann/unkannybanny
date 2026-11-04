@@ -12,7 +12,7 @@
     "required_checks": [
       "ci",
       "semantic-review",
-      "room-review/axel-reviewer"
+      "room-review/shipd-factory-reviewer"
     ],
     "strict": false
   },
